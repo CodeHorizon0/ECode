@@ -1,0 +1,9 @@
+[package]
+name = "ecode"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+eframe = "0.27"
+egui = "0.27"
+syntect = "5.0"
