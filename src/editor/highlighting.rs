@@ -32,7 +32,6 @@ impl Highlighter {
         let syntax = syntax_set
             .find_syntax_by_name(language)
             .unwrap_or_else(|| syntax_set.find_syntax_plain_text());
-
         let theme = theme_set.themes["base16-ocean.dark"].clone();
 
         Self {
@@ -73,8 +72,7 @@ impl Highlighter {
 
         let last_line = end_line.min(line_starts.len() - 1);
         let first_missing = (start_line..=last_line).find(|line| {
-            self.lines[*line].is_none()
-                || self.revisions[*line] != self.revision
+            self.lines[*line].is_none() || self.revisions[*line] != self.revision
         });
 
         let Some(first_missing) = first_missing else {
@@ -96,8 +94,7 @@ impl Highlighter {
             let line_text = &text[line_start..line_end];
 
             let should_cache = line >= first_missing
-                && (self.lines[line].is_none()
-                    || self.revisions[line] != self.revision);
+                && (self.lines[line].is_none() || self.revisions[line] != self.revision);
 
             if should_cache {
                 let mut cached = CachedLine::default();
@@ -127,7 +124,6 @@ impl Highlighter {
                     }
                     Err(_) => {
                         let visible_end = display_end(line_text);
-
                         if visible_end > 0 {
                             cached.ranges.push(StyleRange {
                                 start: 0,

@@ -95,11 +95,7 @@ pub fn char_to_byte(text: &str, column: usize) -> usize {
 }
 
 pub fn char_boundaries(text: &str) -> Vec<usize> {
-    let mut result = Vec::with_capacity(text.chars().count());
-
-    for (index, character) in text.char_indices() {
-        result.push(index + character.len_utf8());
-    }
-
-    result
+    text.char_indices()
+        .map(|(index, character)| index + character.len_utf8())
+        .collect()
 }

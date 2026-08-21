@@ -5,6 +5,7 @@ mod render;
 mod state;
 
 use std::ops::Range;
+use std::path::{Path, PathBuf};
 
 use eframe::egui::{Id, Response, Ui};
 use syntect::highlighting::ThemeSet;
@@ -14,15 +15,19 @@ use self::highlighting::Highlighter;
 use self::state::EditorStats;
 
 pub struct CodeEditor {
-    text: String,
-    cursor: usize,
-    selection: Option<Range<usize>>,
-    selection_anchor: usize,
-    line_starts: Vec<usize>,
-    line_char_counts: Vec<usize>,
-    max_line_chars: usize,
-    char_count: usize,
-    highlighter: Highlighter,
+    pub(super) text: String,
+    pub(super) cursor: usize,
+    pub(super) selection: Option<Range<usize>>,
+    pub(super) selection_anchor: usize,
+    pub(super) line_starts: Vec<usize>,
+    pub(super) line_char_counts: Vec<usize>,
+    pub(super) max_line_chars: usize,
+    pub(super) char_count: usize,
+    pub(super) highlighter: Highlighter,
+    pub(super) path: Option<PathBuf>,
+    pub(super) untitled_name: String,
+    pub(super) dirty: bool,
+    pub(super) focus_requested: bool,
 }
 
 impl CodeEditor {
@@ -31,6 +36,22 @@ impl CodeEditor {
         theme_set: &ThemeSet,
         language: &str,
         initial_text: &str,
+    ) -> Self {
+        Self::new_with_name(
+            syntax_set,
+            theme_set,
+            language,
+            initial_text,
+            "Untitled".to_string(),
+        )
+    }
+
+    pub fn new_with_name(
+        syntax_set: &SyntaxSet,
+        theme_set: &ThemeSet,
+        language: &str,
+        initial_text: &str,
+        untitled_name: String,
     ) -> Self {
         let mut editor = Self {
             text: initial_text.to_string(),
@@ -46,10 +67,33 @@ impl CodeEditor {
                 theme_set,
                 language,
             ),
+            path: None,
+            untitled_name,
+            dirty: false,
+            focus_requested: true,
         };
 
         editor.rebuild_line_index();
         editor.highlighter.sync_line_count(editor.line_count());
+        editor
+    }
+
+    pub fn from_file(
+        syntax_set: &SyntaxSet,
+        theme_set: &ThemeSet,
+        path: PathBuf,
+        language: &str,
+        text: String,
+    ) -> Self {
+        let mut editor = Self::new(
+            syntax_set,
+            theme_set,
+            language,
+            &text,
+        );
+        editor.path = Some(path);
+        editor.dirty = false;
+        editor.focus_requested = true;
         editor
     }
 
@@ -72,6 +116,51 @@ impl CodeEditor {
         }
     }
 
+    pub fn file_name(&self) -> String {
+        self.path
+            .as_deref()
+            .and_then(Path::file_name)
+            .and_then(|value| value.to_str())
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned)
+            .unwrap_or_else(|| self.untitled_name.clone())
+    }
+
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    pub fn mark_saved(&mut self, path: PathBuf) {
+        self.path = Some(path);
+        self.dirty = false;
+    }
+
+    pub fn rename_path(&mut self, path: PathBuf) {
+        self.path = Some(path);
+    }
+
+    pub fn request_focus(&mut self) {
+        self.focus_requested = true;
+    }
+
+    pub fn set_language(
+        &mut self,
+        syntax_set: &SyntaxSet,
+        theme_set: &ThemeSet,
+        language: &str,
+    ) {
+        self.highlighter = Highlighter::new(
+            syntax_set,
+            theme_set,
+            language,
+        );
+        self.highlighter.sync_line_count(self.line_count());
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.dirty
+    }
+
     fn selected_char_count(&self) -> usize {
         match &self.selection {
             Some(range) if range.start < range.end => {
@@ -89,6 +178,7 @@ impl CodeEditor {
         self.rebuild_line_index();
         self.highlighter
             .invalidate_from(edit_line, self.line_count());
+        self.dirty = true;
     }
 
     fn line_count(&self) -> usize {
@@ -117,7 +207,9 @@ impl CodeEditor {
     }
 
     fn column_from_index(&self, line_start: usize, index: usize) -> usize {
-        self.text[line_start..index.min(self.text.len())].chars().count()
+        self.text[line_start..index.min(self.text.len())]
+            .chars()
+            .count()
     }
 
     fn byte_index_from_column(
@@ -126,7 +218,12 @@ impl CodeEditor {
         line_end: usize,
         column: usize,
     ) -> usize {
-        geometry::byte_index_from_column(self, line_start, line_end, column)
+        geometry::byte_index_from_column(
+            self,
+            line_start,
+            line_end,
+            column,
+        )
     }
 
     fn set_selection(&mut self, anchor: usize, cursor: usize) {
@@ -155,11 +252,9 @@ impl CodeEditor {
 
     fn selected_text(&self) -> Option<&str> {
         let range = self.selection.as_ref()?;
-
         if range.start >= range.end {
             return None;
         }
-
         self.text.get(range.start..range.end)
     }
 

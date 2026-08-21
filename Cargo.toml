@@ -6,4 +6,5 @@ edition = "2021"
 [dependencies]
 eframe = "0.27"
 egui = "0.27"
+rfd = "0.14"
 syntect = "5.0"

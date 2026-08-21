@@ -24,6 +24,10 @@ impl CodeEditor {
                         continue;
                     }
 
+                    ui.input_mut(|input| {
+                        input.consume_key(modifiers, key);
+                    });
+
                     if modifiers.ctrl {
                         match key {
                             Key::A => {
@@ -73,19 +77,155 @@ impl CodeEditor {
     fn handle_key(&mut self, key: Key, shift: bool) {
         match key {
             Key::Enter => self.insert_newline(),
-            Key::Tab => self.insert_text(INDENT),
+            Key::Tab => {
+                if shift {
+                    self.unindent_selection();
+                } else {
+                    self.indent_selection();
+                }
+            }
             Key::Backspace => self.backspace(),
             Key::Delete => self.delete_forward(),
             Key::ArrowLeft => self.move_horizontal(-1, shift),
             Key::ArrowRight => self.move_horizontal(1, shift),
             Key::ArrowUp => self.move_vertical(-1, shift),
             Key::ArrowDown => self.move_vertical(1, shift),
-            Key::Home => {
-                self.move_to(self.line_start(self.cursor_line()), shift)
-            }
+            Key::Home => self.move_to(self.line_start(self.cursor_line()), shift),
             Key::End => self.move_to(self.line_end(self.cursor_line()), shift),
             _ => {}
         }
+    }
+
+    fn indent_selection(&mut self) {
+        let Some(range) = self.selection.clone() else {
+            self.insert_text_raw(INDENT);
+            return;
+        };
+
+        let start_line = self.line_from_index(range.start);
+        let end_line = self.line_from_index(range.end);
+        let mut inserted = 0usize;
+
+        for line in (start_line..=end_line).rev() {
+            let position = self.line_start(line);
+            self.text.insert_str(position, INDENT);
+            inserted += INDENT.len();
+
+            if position <= self.cursor {
+                self.cursor += INDENT.len();
+            }
+
+            if position <= self.selection_anchor {
+                self.selection_anchor += INDENT.len();
+            }
+        }
+
+        self.selection = Some(
+            range.start..range.end + inserted,
+        );
+        self.text_changed(start_line);
+    }
+
+    fn unindent_selection(&mut self) {
+        let Some(range) = self.selection.clone() else {
+            self.remove_indent_at_cursor();
+            return;
+        };
+
+        let start_line = self.line_from_index(range.start);
+        let end_line = self.line_from_index(range.end);
+        let mut removed_from_start = 0usize;
+        let mut removed_from_end = 0usize;
+
+        for line in (start_line..=end_line).rev() {
+            let line_start = self.line_start(line);
+            let line_end = self.line_end(line);
+            let remove = if self.text[line_start..line_end].starts_with(INDENT) {
+                INDENT.len()
+            } else if self.text[line_start..line_end].starts_with('\t') {
+                1
+            } else {
+                0
+            };
+
+            if remove == 0 {
+                continue;
+            }
+
+            self.text.replace_range(
+                line_start..line_start + remove,
+                "",
+            );
+
+            if line_start < range.start {
+                removed_from_start += remove;
+            }
+
+            if line_start < range.end {
+                removed_from_end += remove;
+            }
+
+            if self.cursor > line_start {
+                self.cursor = self.cursor.saturating_sub(
+                    remove.min(self.cursor - line_start),
+                );
+            }
+
+            if self.selection_anchor > line_start {
+                self.selection_anchor = self.selection_anchor.saturating_sub(
+                    remove.min(self.selection_anchor - line_start),
+                );
+            }
+        }
+
+        let new_start = range
+            .start
+            .saturating_sub(removed_from_start);
+        let new_end = range
+            .end
+            .saturating_sub(removed_from_end);
+
+        self.selection = if new_start < new_end {
+            Some(new_start..new_end.min(self.text.len()))
+        } else {
+            None
+        };
+
+        self.text_changed(start_line);
+    }
+
+    fn remove_indent_at_cursor(&mut self) {
+        let line = self.cursor_line();
+        let line_start = self.line_start(line);
+        let offset = self.cursor.saturating_sub(line_start);
+
+        if offset >= INDENT.len()
+            && self.text[line_start..self.cursor].ends_with(INDENT)
+        {
+            self.text.replace_range(
+                self.cursor - INDENT.len()..self.cursor,
+                "",
+            );
+            self.cursor -= INDENT.len();
+            self.selection_anchor = self.cursor;
+            self.text_changed(line);
+        } else if offset > 0
+            && self.text[line_start..self.cursor].ends_with('\t')
+        {
+            self.text.replace_range(
+                self.cursor - 1..self.cursor,
+                "",
+            );
+            self.cursor -= 1;
+            self.selection_anchor = self.cursor;
+            self.text_changed(line);
+        }
+    }
+
+    fn insert_text_raw(&mut self, text: &str) {
+        let line = self.cursor_line();
+        self.delete_selection();
+        self.insert_raw(text, line);
     }
 
     fn insert_text(&mut self, text: &str) {
@@ -123,7 +263,6 @@ impl CodeEditor {
 
         let line = self.cursor_line();
         self.delete_selection();
-
         let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
         self.insert_raw(&normalized, line);
     }
@@ -133,7 +272,6 @@ impl CodeEditor {
 
         if let Some(range) = self.selection.take() {
             let selected = self.text[range.start..range.end].to_string();
-
             self.text.replace_range(range.start..range.end, "");
             self.cursor = range.start;
             self.text.insert(self.cursor, open);
@@ -220,11 +358,7 @@ impl CodeEditor {
     }
 
     fn backspace(&mut self) {
-        if self.delete_selection() {
-            return;
-        }
-
-        if self.cursor == 0 {
+        if self.delete_selection() || self.cursor == 0 {
             return;
         }
 
@@ -238,7 +372,6 @@ impl CodeEditor {
             let line = self.cursor_line();
             let next = self.next_char_boundary(self.cursor);
             let previous_cursor = self.previous_char_boundary(self.cursor);
-
             self.text.replace_range(self.cursor..next, "");
             self.text.replace_range(previous_cursor..self.cursor, "");
             self.cursor = previous_cursor;
@@ -256,11 +389,7 @@ impl CodeEditor {
     }
 
     fn delete_forward(&mut self) {
-        if self.delete_selection() {
-            return;
-        }
-
-        if self.cursor >= self.text.len() {
+        if self.delete_selection() || self.cursor >= self.text.len() {
             return;
         }
 

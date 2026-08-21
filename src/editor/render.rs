@@ -16,6 +16,13 @@ pub fn render(
     id: Id,
     syntax_set: &SyntaxSet,
 ) -> Response {
+    if editor.focus_requested {
+        ui.memory_mut(|memory| {
+            memory.request_focus(id.with("interaction"));
+        });
+        editor.focus_requested = false;
+    }
+
     let font_id = FontId::monospace(FONT_SIZE);
     let row_height = ui.fonts(|fonts| fonts.row_height(&font_id));
     let digit_width = ui.fonts(|fonts| fonts.glyph_width(&font_id, '0'));
@@ -64,7 +71,6 @@ pub fn render(
 
             if response.clicked() {
                 response.request_focus();
-
                 if let Some(position) = response.interact_pointer_pos() {
                     let cursor = position_to_cursor(
                         editor,
@@ -75,7 +81,6 @@ pub fn render(
                         row_height,
                         &font_id,
                     );
-
                     editor.cursor = cursor;
                     editor.selection = None;
                     editor.selection_anchor = cursor;
@@ -93,7 +98,6 @@ pub fn render(
                         row_height,
                         &font_id,
                     );
-
                     editor.cursor = cursor;
                     editor.set_selection(editor.selection_anchor, cursor);
                 }
@@ -113,7 +117,6 @@ pub fn render(
                     content_rect.max.y,
                 ),
             );
-
             painter.rect_filled(gutter_rect, 0.0, GUTTER_BACKGROUND);
 
             paint_current_line(
@@ -125,7 +128,6 @@ pub fn render(
                 visible_start,
                 visible_end,
             );
-
             paint_selection(
                 editor,
                 painter,
@@ -136,7 +138,6 @@ pub fn render(
                 visible_start,
                 visible_end,
             );
-
             paint_code(
                 editor,
                 painter,
@@ -147,7 +148,6 @@ pub fn render(
                 visible_start,
                 visible_end,
             );
-
             paint_line_numbers(
                 painter,
                 content_rect,
@@ -200,7 +200,6 @@ fn paint_code(
             .highlighter
             .line_job(&editor.text, line, &editor.line_starts, font_id);
         let galley = painter.layout_job(job);
-
         let y = rect.min.y + TEXT_TOP_PADDING + line as f32 * row_height;
 
         painter.galley(
@@ -237,7 +236,6 @@ fn paint_current_line(
     );
 
     let separator_x = rect.min.x + gutter_width;
-
     painter.line_segment(
         [
             egui::pos2(separator_x, y),
@@ -263,10 +261,8 @@ fn paint_line_numbers(
             font_id.clone(),
             LINE_NUMBER_COLOR,
         );
-
         let y = rect.min.y + TEXT_TOP_PADDING + line as f32 * row_height;
         let x = rect.min.x + gutter_width - GUTTER_RIGHT_PADDING - galley.size().x;
-
         painter.galley(egui::pos2(x, y), galley, LINE_NUMBER_COLOR);
     }
 }
