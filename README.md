@@ -6,4 +6,4 @@ Remember how code editors on older PCs used to launch in milliseconds? This proj
 The current working prototype supports a tab system, code highlighting, and optimized rendering of large code.
 
 ## Planned features
-Code refactoring, multithreaded file parser, ram optimization, fs integration, windows context menu integration (Open as...).
+Code refactoring, multithreaded file parser, ram optimization, windows context menu integration (Open as...).
