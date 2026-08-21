@@ -4,7 +4,7 @@ use syntect::parsing::SyntaxSet;
 use crate::config::{
     BACKGROUND, CURSOR_COLOR, CURRENT_LINE_BACKGROUND, FONT_SIZE, GUTTER_BACKGROUND,
     GUTTER_RIGHT_PADDING, LINE_NUMBER_COLOR, SELECTION_BACKGROUND, SEPARATOR_COLOR,
-    TEXT_LEFT_PADDING, TEXT_TOP_PADDING,
+    TEXT_BOTTOM_PADDING, TEXT_LEFT_PADDING, TEXT_TOP_PADDING,
 };
 
 use super::geometry::{char_boundaries, char_to_byte};
@@ -29,7 +29,8 @@ pub fn render(
     let gutter_width = gutter_width(editor, ui, &font_id);
     let text_x = gutter_width + TEXT_LEFT_PADDING;
     let total_lines = editor.line_count();
-    let total_height = total_lines as f32 * row_height + TEXT_TOP_PADDING * 2.0;
+    let total_height =
+        total_lines as f32 * row_height + TEXT_TOP_PADDING + TEXT_BOTTOM_PADDING;
     let content_width = ui.available_width().max(
         text_x + editor.max_line_chars as f32 * digit_width + 32.0,
     );
@@ -69,7 +70,9 @@ pub fn render(
                 Sense::click_and_drag(),
             );
 
-            if response.clicked() {
+            let modifiers = ui.input(|input| input.modifiers);
+
+            if response.double_clicked() {
                 response.request_focus();
                 if let Some(position) = response.interact_pointer_pos() {
                     let cursor = position_to_cursor(
@@ -82,8 +85,61 @@ pub fn render(
                         &font_id,
                     );
                     editor.cursor = cursor;
-                    editor.selection = None;
-                    editor.selection_anchor = cursor;
+                    editor.select_word_at(cursor);
+                }
+            } else if response.triple_clicked() {
+                response.request_focus();
+                if let Some(position) = response.interact_pointer_pos() {
+                    let cursor = position_to_cursor(
+                        editor,
+                        ui,
+                        position,
+                        content_rect,
+                        gutter_width,
+                        row_height,
+                        &font_id,
+                    );
+                    editor.cursor = cursor;
+                    editor.select_line_at(cursor);
+                }
+            } else if response.drag_started() {
+                response.request_focus();
+                if let Some(position) = response.interact_pointer_pos() {
+                    let cursor = position_to_cursor(
+                        editor,
+                        ui,
+                        position,
+                        content_rect,
+                        gutter_width,
+                        row_height,
+                        &font_id,
+                    );
+                    editor.cursor = cursor;
+                    if !modifiers.shift {
+                        editor.selection_anchor = cursor;
+                        editor.selection = None;
+                    }
+                }
+            } else if response.clicked() {
+                response.request_focus();
+                if let Some(position) = response.interact_pointer_pos() {
+                    let cursor = position_to_cursor(
+                        editor,
+                        ui,
+                        position,
+                        content_rect,
+                        gutter_width,
+                        row_height,
+                        &font_id,
+                    );
+                    editor.cursor = cursor;
+
+                    if modifiers.shift {
+                        editor.set_selection(editor.selection_anchor, cursor);
+                    } else {
+                        editor.selection_anchor = cursor;
+                        editor.selection = None;
+                    }
                 }
             }
 

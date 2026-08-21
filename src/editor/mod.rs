@@ -15,6 +15,7 @@ use self::highlighting::Highlighter;
 use self::state::EditorStats;
 
 pub struct CodeEditor {
+    pub(super) uid: u64,
     pub(super) text: String,
     pub(super) cursor: usize,
     pub(super) selection: Option<Range<usize>>,
@@ -54,6 +55,7 @@ impl CodeEditor {
         untitled_name: String,
     ) -> Self {
         let mut editor = Self {
+            uid: 0,
             text: initial_text.to_string(),
             cursor: 0,
             selection: None,
@@ -76,6 +78,15 @@ impl CodeEditor {
         editor.rebuild_line_index();
         editor.highlighter.sync_line_count(editor.line_count());
         editor
+    }
+
+    pub fn with_uid(mut self, uid: u64) -> Self {
+        self.uid = uid;
+        self
+    }
+
+    pub fn uid(&self) -> u64 {
+        self.uid
     }
 
     pub fn from_file(
@@ -305,6 +316,71 @@ impl CodeEditor {
             position += 1;
         }
         position
+    }
+
+    fn select_word_at(&mut self, cursor: usize) {
+        if self.text.is_empty() {
+            self.selection = None;
+            return;
+        }
+
+        let cursor = cursor.min(self.text.len());
+        let mut start = cursor;
+        let mut end = cursor;
+
+        let character_at = |index: usize| self.text[index..].chars().next();
+        let is_word = |character: char| character.is_alphanumeric() || character == '_';
+
+        if let Some(character) = character_at(cursor) {
+            if is_word(character) {
+                while start > 0 {
+                    let previous = self.previous_char_boundary(start);
+                    match self.text[previous..start].chars().next() {
+                        Some(character) if is_word(character) => start = previous,
+                        _ => break,
+                    }
+                }
+
+                while end < self.text.len() {
+                    match self.text[end..].chars().next() {
+                        Some(character) if is_word(character) => {
+                            end = self.next_char_boundary(end);
+                        }
+                        _ => break,
+                    }
+                }
+            } else {
+                start = self.previous_char_boundary(cursor.saturating_add(1));
+                end = self.next_char_boundary(cursor);
+            }
+        } else {
+            start = self.previous_char_boundary(cursor);
+            end = cursor;
+        }
+
+        if start < end {
+            self.selection = Some(start..end);
+            self.selection_anchor = start;
+        } else {
+            self.selection = None;
+            self.selection_anchor = cursor;
+        }
+    }
+
+    fn select_line_at(&mut self, cursor: usize) {
+        let line = self.line_from_index(cursor);
+        let start = self.line_start(line);
+        let end = self.line_end(line);
+
+        if start < end {
+            self.selection = Some(start..end);
+            self.selection_anchor = start;
+            self.cursor = end;
+        } else {
+            self.selection = None;
+            self.selection_anchor = start;
+            self.cursor = start;
+        }
     }
 
     fn insert_raw(&mut self, text: &str, edit_line: usize) {

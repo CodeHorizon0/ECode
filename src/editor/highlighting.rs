@@ -1,6 +1,7 @@
 use eframe::egui::{text::LayoutJob, Color32, FontId};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::Theme;
+use vscode_theme_syntect::parse_vscode_theme;
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
 #[derive(Clone, Copy)]
@@ -32,7 +33,9 @@ impl Highlighter {
         let syntax = syntax_set
             .find_syntax_by_name(language)
             .unwrap_or_else(|| syntax_set.find_syntax_plain_text());
-        let theme = theme_set.themes["base16-ocean.dark"].clone();
+        let theme = parse_vscode_theme(include_str!("../../assets/ecode-dark.json"))
+            .and_then(Theme::try_from)
+            .unwrap_or_else(|_| theme_set.themes["base16-ocean.dark"].clone());
 
         Self {
             syntax: syntax.clone(),

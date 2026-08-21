@@ -30,7 +30,8 @@ pub struct CodeApp {
     startup_time: Instant,
     startup_logged: bool,
     last_error: Option<String>,
-    close_confirmation: Option<usize>,
+    close_confirmation: Option<u64>,
+    next_editor_uid: u64,
     explorer_dialog: Option<ExplorerDialogKind>,
     explorer_dialog_name: String,
 }
@@ -48,7 +49,7 @@ impl CodeApp {
     println!("Hello, world!");
 }"#,
             "Untitled 1".to_string(),
-        );
+        ).with_uid(1);
 
         Self {
             syntax_set,
@@ -62,19 +63,23 @@ impl CodeApp {
             startup_logged: false,
             last_error: None,
             close_confirmation: None,
+            next_editor_uid: 2,
             explorer_dialog: None,
             explorer_dialog_name: String::new(),
         }
     }
 
     fn new_tab(&mut self) {
+        let uid = self.next_editor_uid;
+        self.next_editor_uid = self.next_editor_uid.wrapping_add(1);
+
         let editor = CodeEditor::new_with_name(
             &self.syntax_set,
             &self.theme_set,
             &self.new_tab_language,
             "",
             format!("Untitled {}", self.untitled_index()),
-        );
+        ).with_uid(uid);
 
         self.editors.push(editor);
         self.current_tab = self.editors.len() - 1;
@@ -137,13 +142,16 @@ impl CodeApp {
             return;
         }
 
+        let uid = self.next_editor_uid;
+        self.next_editor_uid = self.next_editor_uid.wrapping_add(1);
+
         let editor = CodeEditor::from_file(
             &self.syntax_set,
             &self.theme_set,
             file.path,
             &file.language,
             file.text,
-        );
+        ).with_uid(uid);
 
         self.editors.push(editor);
         self.current_tab = self.editors.len() - 1;
@@ -271,7 +279,7 @@ impl CodeApp {
         }
 
         if self.editors[self.current_tab].is_dirty() {
-            self.close_confirmation = Some(self.current_tab);
+            self.close_confirmation = self.editors.get(self.current_tab).map(CodeEditor::uid);
             return;
         }
 
@@ -305,7 +313,7 @@ impl CodeApp {
         }
 
         if self.editors[index].is_dirty() {
-            self.close_confirmation = Some(index);
+            self.close_confirmation = self.editors.get(index).map(CodeEditor::uid);
             return;
         }
 
@@ -459,6 +467,9 @@ impl CodeApp {
     }
 
     fn render_tabs(&mut self, ctx: &Context) {
+        let mut selected_tab = None;
+        let mut close_tab = None;
+
         egui::TopBottomPanel::top("tabs")
             .exact_height(34.0)
             .show(ctx, |ui| {
@@ -475,7 +486,11 @@ impl CodeApp {
                                 let dirty = self.editors[index].is_dirty();
 
                                 let frame = egui::Frame::none()
-                                    .fill(if selected { TAB_ACTIVE } else { egui::Color32::TRANSPARENT })
+                                    .fill(if selected {
+                                        TAB_ACTIVE
+                                    } else {
+                                        egui::Color32::TRANSPARENT
+                                    })
                                     .inner_margin(egui::Margin::symmetric(8.0, 0.0));
 
                                 frame.show(ui, |ui| {
@@ -501,12 +516,11 @@ impl CodeApp {
                                         }
 
                                         if response.clicked() {
-                                            self.current_tab = index;
-                                            self.request_editor_focus();
+                                            selected_tab = Some(index);
                                         }
 
                                         if ui.small_button("×").clicked() {
-                                            self.close_tab(index);
+                                            close_tab = Some(index);
                                         }
                                     });
                                 });
@@ -514,6 +528,17 @@ impl CodeApp {
                         });
                     });
             });
+
+        if let Some(index) = selected_tab {
+            if index < self.editors.len() {
+                self.current_tab = index;
+                self.request_editor_focus();
+            }
+        }
+
+        if let Some(index) = close_tab {
+            self.close_tab(index);
+        }
     }
 
     fn render_explorer(&mut self, ctx: &Context) {
@@ -531,7 +556,7 @@ impl CodeApp {
             .min_width(170.0)
             .max_width(420.0)
             .show(ctx, |ui| {
-                ui.add_space(6.0);
+                ui.add_space(8.0);
 
                 ui.horizontal(|ui| {
                     ui.strong("EXPLORER");
@@ -556,11 +581,16 @@ impl CodeApp {
                     );
                 });
 
-                ui.add_space(4.0);
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(6.0);
 
-                let root = self.workspace.root().map(Path::to_path_buf);
+                if self.workspace.is_open() {
+                    let root = self.workspace.root().map(Path::to_path_buf);
 
-                if let Some(root) = root {
+                    let Some(root) = root else {
+                        return;
+                    };
                     ui.label(
                         RichText::new(root.display().to_string())
                             .small()
@@ -593,6 +623,11 @@ impl CodeApp {
                         .id_source("explorer_tree")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
+                            let explorer_font = egui::FontId::proportional(13.0);
+                            let explorer_row_height = ui
+                                .fonts(|fonts| fonts.row_height(&explorer_font))
+                                .max(20.0);
+
                             for node in self.workspace.visible_nodes() {
                                 let selected = self
                                     .workspace
@@ -600,7 +635,27 @@ impl CodeApp {
                                     .map(|path| path == node.path.as_path())
                                     .unwrap_or(false);
 
-                                let indent = 8.0 + node.depth as f32 * 14.0;
+                                let row_height = explorer_row_height;
+                                let row_width = ui.available_width();
+                                let (row_rect, response) = ui.allocate_exact_size(
+                                    egui::vec2(row_width, row_height),
+                                    egui::Sense::click(),
+                                );
+
+                                if selected {
+                                    ui.painter().rect_filled(
+                                        row_rect,
+                                        3.0,
+                                        egui::Color32::from_rgb(38, 79, 120),
+                                    );
+                                } else if response.hovered() {
+                                    ui.painter().rect_filled(
+                                        row_rect,
+                                        3.0,
+                                        egui::Color32::from_rgb(29, 34, 44),
+                                    );
+                                }
+
                                 let icon = match node.kind {
                                     NodeKind::Directory => {
                                         if node.expanded { "▾" } else { "▸" }
@@ -608,19 +663,16 @@ impl CodeApp {
                                     NodeKind::File => "•",
                                 };
 
-                                let label = format!("{} {}", icon, node.name);
-
-                                let mut response = None;
-
-                                ui.horizontal(|ui| {
-                                    ui.add_space(indent);
-                                    response = Some(ui.add_sized(
-                                        [ui.available_width(), 24.0],
-                                        egui::SelectableLabel::new(selected, label),
-                                    ));
+                                ui.allocate_ui_at_rect(row_rect, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.add_space(8.0 + node.depth as f32 * 14.0);
+                                        ui.label(RichText::new(icon).monospace());
+                                        ui.add_space(4.0);
+                                        ui.label(RichText::new(node.name.clone()).size(13.0));
+                                    });
                                 });
 
-                                if response.map(|value| value.clicked()).unwrap_or(false) {
+                                if response.clicked() {
                                     select_path = Some(node.path.clone());
 
                                     match node.kind {
@@ -959,14 +1011,14 @@ impl CodeApp {
     }
 
     fn render_close_confirmation(&mut self, ctx: &Context) {
-        let Some(index) = self.close_confirmation else {
+        let Some(uid) = self.close_confirmation else {
             return;
         };
 
-        if index >= self.editors.len() {
+        let Some(index) = self.editors.iter().position(|editor| editor.uid() == uid) else {
             self.close_confirmation = None;
             return;
-        }
+        };
 
         let name = self.editors[index].file_name();
         let mut action = None;
@@ -997,13 +1049,24 @@ impl CodeApp {
                 self.current_tab = index;
                 self.save_current();
 
-                if !self.editors[index].is_dirty() {
-                    self.remove_tab(index);
+                let still_open = self
+                    .editors
+                    .iter()
+                    .position(|editor| editor.uid() == uid);
+
+                if let Some(index) = still_open {
+                    if !self.editors[index].is_dirty() {
+                        self.remove_tab(index);
+                        self.close_confirmation = None;
+                    }
+                } else {
                     self.close_confirmation = None;
                 }
             }
             Some(1) => {
-                self.remove_tab(index);
+                if let Some(index) = self.editors.iter().position(|editor| editor.uid() == uid) {
+                    self.remove_tab(index);
+                }
                 self.close_confirmation = None;
             }
             Some(2) => {
@@ -1013,6 +1076,7 @@ impl CodeApp {
             _ => {}
         }
     }
+
 }
 
 impl eframe::App for CodeApp {
