@@ -70,6 +70,26 @@ pub fn render(
                 Sense::click_and_drag(),
             );
 
+            if response.hovered() {
+                ui.output_mut(|output| {
+                    output.cursor_icon = egui::CursorIcon::Text;
+                });
+            }
+
+            if response.has_focus() {
+                ui.memory_mut(|memory| {
+                    memory.set_focus_lock_filter(
+                        response.id,
+                        egui::EventFilter {
+                            tab: true,
+                            horizontal_arrows: true,
+                            vertical_arrows: true,
+                            escape: false,
+                        },
+                    );
+                });
+            }
+
             let modifiers = ui.input(|input| input.modifiers);
 
             if response.double_clicked() {

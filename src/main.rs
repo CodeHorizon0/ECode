@@ -1,4 +1,5 @@
 mod app;
+mod bindings;
 mod config;
 mod editor;
 mod fs;

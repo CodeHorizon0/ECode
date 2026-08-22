@@ -6,6 +6,7 @@ use eframe::CreationContext;
 use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 
+use crate::bindings::{default_bindings, Action, Binding};
 use crate::config::{BACKGROUND, LANGUAGES, TAB_ACTIVE, TAB_HOVER};
 use crate::editor::CodeEditor;
 use crate::fs;
@@ -34,6 +35,13 @@ pub struct CodeApp {
     next_editor_uid: u64,
     explorer_dialog: Option<ExplorerDialogKind>,
     explorer_dialog_name: String,
+    bindings: Vec<Binding>,
+    find_open: bool,
+    replace_open: bool,
+    search_query: String,
+    replace_query: String,
+    go_to_line_open: bool,
+    go_to_line_input: String,
 }
 
 impl CodeApp {
@@ -66,6 +74,13 @@ impl CodeApp {
             next_editor_uid: 2,
             explorer_dialog: None,
             explorer_dialog_name: String::new(),
+            bindings: default_bindings(),
+            find_open: false,
+            replace_open: false,
+            search_query: String::new(),
+            replace_query: String::new(),
+            go_to_line_open: false,
+            go_to_line_input: String::new(),
         }
     }
 
@@ -344,67 +359,169 @@ impl CodeApp {
     }
 
     fn handle_global_shortcuts(&mut self, ctx: &Context) {
-        let mut save = false;
-        let mut save_as = false;
-        let mut open = false;
-        let mut new_tab = false;
-        let mut close = false;
-        let mut project = false;
+        let mut actions = Vec::new();
 
-        ctx.input_mut(|input| {
-            if input.modifiers.ctrl
-                && input.modifiers.shift
-                && input.consume_key(input.modifiers, egui::Key::S)
-            {
-                save_as = true;
-            } else if input.modifiers.ctrl
-                && !input.modifiers.shift
-                && input.consume_key(input.modifiers, egui::Key::S)
-            {
-                save = true;
+        for binding in &self.bindings {
+            let consumed = ctx.input_mut(|input| {
+                input.consume_shortcut(&binding.shortcut)
+            });
+
+            if consumed {
+                actions.push(binding.action);
+            }
+        }
+
+        for action in actions {
+            self.execute_action(action);
+        }
+    }
+
+    fn execute_action(&mut self, action: Action) {
+        match action {
+            Action::Save => self.save_current(),
+            Action::SaveAs => self.save_current_as(),
+            Action::SaveAll => self.save_all(),
+            Action::OpenFile => self.open_file_dialog(),
+            Action::OpenFolder => self.open_project(),
+            Action::NewTab => self.new_tab(),
+            Action::CloseTab => self.close_current_tab(),
+            Action::CloseAllTabs => self.close_all_tabs(),
+            Action::NextTab => self.select_relative_tab(1),
+            Action::PreviousTab => self.select_relative_tab(-1),
+            Action::Undo => self.with_current_editor(|editor| editor.undo()),
+            Action::Redo => self.with_current_editor(|editor| editor.redo()),
+            Action::Find => self.open_find(),
+            Action::FindNext => self.find_next(),
+            Action::FindPrevious => self.find_previous(),
+            Action::Replace => self.open_replace(),
+            Action::GoToLine => self.open_go_to_line(),
+            Action::SelectAll => self.with_current_editor(|editor| editor.select_all()),
+            Action::SelectWord => self.with_current_editor(|editor| editor.select_word()),
+            Action::SelectLine => self.with_current_editor(|editor| editor.select_current_line()),
+            Action::DeleteLine => self.with_current_editor(|editor| editor.delete_current_line()),
+            Action::MoveLineUp => self.with_current_editor(|editor| editor.move_current_line(-1)),
+            Action::MoveLineDown => self.with_current_editor(|editor| editor.move_current_line(1)),
+            Action::ToggleLineComment => self.with_current_editor(|editor| editor.toggle_line_comment()),
+            Action::RenameSelected => self.open_explorer_dialog(ExplorerDialogKind::Rename),
+        }
+    }
+
+    fn with_current_editor<F>(&mut self, operation: F)
+    where
+        F: FnOnce(&mut CodeEditor),
+    {
+        let current_tab = self.current_tab;
+        if let Some(editor) = self.editors.get_mut(current_tab) {
+            operation(editor);
+        }
+        self.request_editor_focus();
+    }
+
+    fn save_all(&mut self) {
+        let count = self.editors.len();
+        for index in 0..count {
+            if index == self.current_tab {
+                self.save_current();
+                continue;
             }
 
-            if input.modifiers.ctrl
-                && !input.modifiers.shift
-                && input.consume_key(input.modifiers, egui::Key::O)
-            {
-                open = true;
-            }
-
-            if input.modifiers.ctrl
-                && !input.modifiers.shift
-                && input.consume_key(input.modifiers, egui::Key::N)
-            {
-                new_tab = true;
-            }
-
-            if input.modifiers.ctrl
-                && !input.modifiers.shift
-                && input.consume_key(input.modifiers, egui::Key::W)
-            {
-                close = true;
-            }
-
-            if input.modifiers.ctrl
-                && input.modifiers.shift
-                && input.consume_key(input.modifiers, egui::Key::O)
-            {
-                project = true;
-            }
-        });
-
-        if save_as {
-            self.save_current_as();
-        } else if save {
+            let previous = self.current_tab;
+            self.current_tab = index;
             self.save_current();
-        } else if project {
-            self.open_project();
-        } else if open {
-            self.open_file_dialog();
-        } else if new_tab {
-            self.new_tab();
-        } else if close {
-            self.close_current_tab();
+            self.current_tab = previous.min(self.editors.len().saturating_sub(1));
+        }
+        self.request_editor_focus();
+    }
+
+    fn close_all_tabs(&mut self) {
+        let mut index = self.editors.len();
+        while index > 1 {
+            index -= 1;
+            if self.editors[index].is_dirty() {
+                self.current_tab = index;
+                self.close_confirmation = Some(self.editors[index].uid());
+                return;
+            }
+            self.editors.remove(index);
+        }
+
+        self.current_tab = 0;
+        self.request_editor_focus();
+    }
+
+    fn select_relative_tab(&mut self, direction: isize) {
+        if self.editors.is_empty() {
+            return;
+        }
+
+        let count = self.editors.len() as isize;
+        let current = self.current_tab as isize;
+        self.current_tab = ((current + direction).rem_euclid(count)) as usize;
+        self.request_editor_focus();
+    }
+
+    fn open_find(&mut self) {
+        self.find_open = true;
+        self.replace_open = false;
+        self.request_editor_focus();
+    }
+
+    fn open_replace(&mut self) {
+        self.find_open = true;
+        self.replace_open = true;
+        self.request_editor_focus();
+    }
+
+    fn open_go_to_line(&mut self) {
+        self.go_to_line_open = true;
+        self.go_to_line_input.clear();
+    }
+
+    fn find_next(&mut self) {
+        if self.search_query.is_empty() {
+            self.open_find();
+            return;
+        }
+
+        let current_tab = self.current_tab;
+        let query = self.search_query.clone();
+        let mut found = false;
+        {
+            let Some(editor) = self.editors.get_mut(current_tab) else { return; };
+            let start = editor.cursor;
+            if let Some(offset) = editor.text[start..].find(&query) {
+                let position = start + offset;
+                editor.set_search_selection(position, position + query.len());
+                found = true;
+            } else if let Some(offset) = editor.text.find(&query) {
+                editor.set_search_selection(offset, offset + query.len());
+                found = true;
+            }
+        }
+        if found {
+            self.request_editor_focus();
+        }
+    }
+
+    fn find_previous(&mut self) {
+        if self.search_query.is_empty() {
+            self.open_find();
+            return;
+        }
+
+        let current_tab = self.current_tab;
+        let query = self.search_query.clone();
+        let mut found = false;
+        {
+            let Some(editor) = self.editors.get_mut(current_tab) else { return; };
+            let before = editor.cursor.min(editor.text.len());
+            if let Some(position) = editor.text[..before].rfind(&query) {
+                editor.set_search_selection(position, position + query.len());
+                found = true;
+            }
+        }
+        if found {
+            self.request_editor_focus();
         }
     }
 
@@ -954,6 +1071,81 @@ impl CodeApp {
         }
     }
 
+    fn render_search_bar(&mut self, ctx: &Context) {
+        if !self.find_open {
+            return;
+        }
+
+        egui::TopBottomPanel::top("search_bar")
+            .exact_height(if self.replace_open { 68.0 } else { 36.0 })
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Find");
+                    let response = ui.text_edit_singleline(&mut self.search_query);
+                    response.request_focus();
+                    if response.lost_focus() && ui.input(|input| input.key_pressed(eframe::egui::Key::Enter)) {
+                        self.find_next();
+                    }
+                    if ui.button("Next").clicked() { self.find_next(); }
+                    if ui.button("Prev").clicked() { self.find_previous(); }
+                    if self.replace_open && ui.button("Close").clicked() { self.find_open = false; }
+                });
+
+                if self.replace_open {
+                    ui.horizontal(|ui| {
+                        ui.label("Replace");
+                        ui.text_edit_singleline(&mut self.replace_query);
+                        if ui.button("Replace All").clicked() {
+                            self.replace_all();
+                        }
+                    });
+                }
+            });
+    }
+
+    fn replace_all(&mut self) {
+        if self.search_query.is_empty() { return; }
+        let query = self.search_query.clone();
+        let replacement = self.replace_query.clone();
+        {
+            if let Some(editor) = self.editors.get_mut(self.current_tab) {
+                if editor.text.contains(&query) {
+                    editor.text = editor.text.replace(&query, &replacement);
+                    editor.set_cursor(editor.text.len());
+                    editor.mark_text_changed(0);
+                }
+            }
+        }
+        self.request_editor_focus();
+    }
+
+    fn render_go_to_line(&mut self, ctx: &Context) {
+        if !self.go_to_line_open { return; }
+
+        egui::TopBottomPanel::top("goto_line")
+            .exact_height(36.0)
+            .show(ctx, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Go to line");
+                    let response = ui.text_edit_singleline(&mut self.go_to_line_input);
+                    if response.lost_focus() && ui.input(|input| input.key_pressed(eframe::egui::Key::Enter)) {
+                        self.apply_go_to_line();
+                    }
+                    if ui.button("Go").clicked() { self.apply_go_to_line(); }
+                    if ui.button("Close").clicked() { self.go_to_line_open = false; }
+                });
+            });
+    }
+
+    fn apply_go_to_line(&mut self) {
+        let Ok(line) = self.go_to_line_input.trim().parse::<usize>() else { return; };
+        if let Some(editor) = self.editors.get_mut(self.current_tab) {
+            editor.go_to_line(line);
+        }
+        self.go_to_line_open = false;
+        self.request_editor_focus();
+    }
+
     fn render_editor(&mut self, ctx: &Context) {
         egui::CentralPanel::default()
             .frame(
@@ -1093,6 +1285,8 @@ impl eframe::App for CodeApp {
         self.render_menu(ctx);
         self.render_tabs(ctx);
         self.render_explorer(ctx);
+        self.render_search_bar(ctx);
+        self.render_go_to_line(ctx);
         self.render_editor(ctx);
         self.render_status(ctx);
         self.render_close_confirmation(ctx);

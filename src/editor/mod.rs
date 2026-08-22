@@ -12,7 +12,7 @@ use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 
 use self::highlighting::Highlighter;
-use self::state::EditorStats;
+use self::state::{EditorSnapshot, EditorStats};
 
 pub struct CodeEditor {
     pub(super) uid: u64,
@@ -29,6 +29,8 @@ pub struct CodeEditor {
     pub(super) untitled_name: String,
     pub(super) dirty: bool,
     pub(super) focus_requested: bool,
+    pub(super) undo_stack: Vec<EditorSnapshot>,
+    pub(super) redo_stack: Vec<EditorSnapshot>,
 }
 
 impl CodeEditor {
@@ -73,10 +75,13 @@ impl CodeEditor {
             untitled_name,
             dirty: false,
             focus_requested: true,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
         };
 
         editor.rebuild_line_index();
         editor.highlighter.sync_line_count(editor.line_count());
+        editor.push_snapshot();
         editor
     }
 
@@ -172,6 +177,170 @@ impl CodeEditor {
         self.dirty
     }
 
+    pub fn set_search_selection(&mut self, start: usize, end: usize) {
+        let start = start.min(self.text.len());
+        let end = end.min(self.text.len());
+        if start >= end {
+            self.selection = None;
+            self.cursor = start;
+            self.selection_anchor = start;
+            return;
+        }
+        self.selection = Some(start..end);
+        self.selection_anchor = start;
+        self.cursor = end;
+        self.request_focus();
+    }
+
+    pub fn set_cursor(&mut self, cursor: usize) {
+        self.cursor = cursor.min(self.text.len());
+        self.selection = None;
+        self.selection_anchor = self.cursor;
+    }
+
+    pub fn go_to_line(&mut self, line: usize) {
+        let line_index = line.saturating_sub(1).min(self.line_count().saturating_sub(1));
+        self.cursor = self.line_start(line_index);
+        self.selection = None;
+        self.selection_anchor = self.cursor;
+        self.request_focus();
+    }
+
+    pub fn mark_text_changed(&mut self, edit_line: usize) {
+        self.text_changed(edit_line);
+    }
+
+    fn snapshot(&self) -> EditorSnapshot {
+        EditorSnapshot {
+            text: self.text.clone(),
+            cursor: self.cursor,
+            selection: self.selection.clone(),
+            selection_anchor: self.selection_anchor,
+        }
+    }
+
+    fn push_snapshot(&mut self) {
+        let snapshot = self.snapshot();
+        if self.undo_stack.last().map(|value| value.text.as_str()) != Some(snapshot.text.as_str()) {
+            self.undo_stack.push(snapshot);
+            if self.undo_stack.len() > 200 {
+                self.undo_stack.remove(0);
+            }
+        }
+    }
+
+    pub fn undo(&mut self) {
+        if self.undo_stack.len() <= 1 {
+            return;
+        }
+
+        let current = self.undo_stack.pop().unwrap();
+        self.redo_stack.push(current);
+
+        if let Some(snapshot) = self.undo_stack.last().cloned() {
+            self.restore_snapshot(snapshot);
+        }
+    }
+
+    pub fn redo(&mut self) {
+        let Some(snapshot) = self.redo_stack.pop() else {
+            return;
+        };
+
+        self.undo_stack.push(snapshot.clone());
+        self.restore_snapshot(snapshot);
+    }
+
+    fn restore_snapshot(&mut self, snapshot: EditorSnapshot) {
+        self.text = snapshot.text;
+        self.cursor = snapshot.cursor.min(self.text.len());
+        self.selection = snapshot.selection.filter(|range| range.end <= self.text.len());
+        self.selection_anchor = snapshot.selection_anchor.min(self.text.len());
+        self.rebuild_line_index();
+        self.highlighter.sync_line_count(self.line_count());
+        self.highlighter.invalidate_from(0, self.line_count());
+        self.dirty = true;
+    }
+
+    pub fn select_word(&mut self) {
+        self.select_word_at(self.cursor);
+    }
+
+    pub fn select_current_line(&mut self) {
+        self.select_line_at(self.cursor);
+    }
+
+    pub fn delete_current_line(&mut self) {
+        let line = self.cursor_line();
+        let start = self.line_start(line);
+        let end = if line + 1 < self.line_starts.len() { self.line_starts[line + 1] } else { self.text.len() };
+        self.selection = Some(start..end);
+        self.cursor = end;
+        self.delete_selection();
+    }
+
+    pub fn move_current_line(&mut self, direction: i32) {
+        let line = self.cursor_line();
+        let target = if direction < 0 { line.checked_sub(1) } else if line + 1 < self.line_count() { Some(line + 1) } else { None };
+        let Some(target) = target else { return; };
+
+        let current_start = self.line_start(line);
+        let current_end = if line + 1 < self.line_starts.len() { self.line_starts[line + 1] } else { self.text.len() };
+        let target_start = self.line_start(target);
+        let target_end = if target + 1 < self.line_starts.len() { self.line_starts[target + 1] } else { self.text.len() };
+
+        let current = self.text[current_start..current_end].to_string();
+        let target_text = self.text[target_start..target_end].to_string();
+        let old_cursor = self.cursor;
+        let column = old_cursor.saturating_sub(current_start);
+
+        let current_len = current.len();
+        let target_len = target_text.len();
+
+        if direction < 0 {
+            let replacement = format!("{}{}", current, target_text);
+            self.text.replace_range(target_start..current_end, &replacement);
+            self.cursor = target_start + column.min(current_len);
+        } else {
+            let replacement = format!("{}{}", target_text, current);
+            self.text.replace_range(current_start..target_end, &replacement);
+            let new_start = current_start + target_len;
+            self.cursor = new_start + column.min(current_len);
+        }
+
+        self.selection = None;
+        self.selection_anchor = self.cursor;
+        self.text_changed(line.min(target));
+    }
+
+    pub fn toggle_line_comment(&mut self) {
+        let line = self.cursor_line();
+        let start = self.line_start(line);
+        let end = self.line_end(line);
+        let content = &self.text[start..end];
+
+        let comment = match self.highlighter.language_name() {
+            "Rust" | "C" | "C++" | "JavaScript" | "TypeScript" => "// ",
+            "Python" | "Shell Script" => "# ",
+            _ => "// ",
+        };
+
+        let leading = content.len() - content.trim_start_matches([' ', '\t']).len();
+        let insert_at = start + leading;
+
+        if content[leading..].starts_with(comment) {
+            self.text.replace_range(insert_at..insert_at + comment.len(), "");
+            self.cursor = self.cursor.saturating_sub(comment.len());
+            self.selection_anchor = self.selection_anchor.saturating_sub(comment.len());
+        } else {
+            self.text.insert_str(insert_at, comment);
+            if insert_at <= self.cursor { self.cursor += comment.len(); }
+            if insert_at <= self.selection_anchor { self.selection_anchor += comment.len(); }
+        }
+
+        self.text_changed(line);
+    }
+
     fn selected_char_count(&self) -> usize {
         match &self.selection {
             Some(range) if range.start < range.end => {
@@ -190,6 +359,8 @@ impl CodeEditor {
         self.highlighter
             .invalidate_from(edit_line, self.line_count());
         self.dirty = true;
+        self.redo_stack.clear();
+        self.push_snapshot();
     }
 
     fn line_count(&self) -> usize {
@@ -250,7 +421,7 @@ impl CodeEditor {
         };
     }
 
-    fn select_all(&mut self) {
+    pub fn select_all(&mut self) {
         if self.text.is_empty() {
             self.selection = None;
             return;

@@ -22,6 +22,7 @@ pub struct Highlighter {
     lines: Vec<Option<CachedLine>>,
     revisions: Vec<u64>,
     revision: u64,
+    language: String,
 }
 
 impl Highlighter {
@@ -43,7 +44,12 @@ impl Highlighter {
             lines: Vec::new(),
             revisions: Vec::new(),
             revision: 0,
+            language: language.to_string(),
         }
+    }
+
+    pub fn language_name(&self) -> &str {
+        &self.language
     }
 
     pub fn sync_line_count(&mut self, count: usize) {

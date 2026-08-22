@@ -43,6 +43,30 @@ impl CodeEditor {
                                 continue;
                             }
                             Key::V => continue,
+                            Key::ArrowLeft => {
+                                self.move_word(-1, modifiers.shift);
+                                continue;
+                            }
+                            Key::ArrowRight => {
+                                self.move_word(1, modifiers.shift);
+                                continue;
+                            }
+                            Key::Home => {
+                                self.move_to(0, modifiers.shift);
+                                continue;
+                            }
+                            Key::End => {
+                                self.move_to(self.text.len(), modifiers.shift);
+                                continue;
+                            }
+                            Key::Backspace => {
+                                self.delete_word_backward();
+                                continue;
+                            }
+                            Key::Delete => {
+                                self.delete_word_forward();
+                                continue;
+                            }
                             _ => {}
                         }
                     }
@@ -92,7 +116,121 @@ impl CodeEditor {
             Key::ArrowDown => self.move_vertical(1, shift),
             Key::Home => self.move_to(self.line_start(self.cursor_line()), shift),
             Key::End => self.move_to(self.line_end(self.cursor_line()), shift),
+            Key::PageUp => {
+                for _ in 0..20 {
+                    self.move_vertical(-1, shift);
+                }
+            }
+            Key::PageDown => {
+                for _ in 0..20 {
+                    self.move_vertical(1, shift);
+                }
+            }
             _ => {}
+        }
+    }
+
+    fn move_word(&mut self, direction: i32, shift: bool) {
+        if !shift && self.selection.is_some() {
+            let range = self.selection.take().unwrap();
+            self.cursor = if direction < 0 { range.start } else { range.end };
+            self.selection_anchor = self.cursor;
+            return;
+        }
+
+        if direction < 0 {
+            while self.cursor > 0 {
+                let previous = self.previous_char_boundary(self.cursor);
+                let character = self.text[previous..self.cursor].chars().next().unwrap_or(' ');
+                if character.is_whitespace() {
+                    self.cursor = previous;
+                } else {
+                    break;
+                }
+            }
+
+            while self.cursor > 0 {
+                let previous = self.previous_char_boundary(self.cursor);
+                let character = self.text[previous..self.cursor].chars().next().unwrap_or(' ');
+                if character.is_alphanumeric() || character == '_' {
+                    self.cursor = previous;
+                } else {
+                    break;
+                }
+            }
+        } else {
+            while self.cursor < self.text.len() {
+                let character = self.text[self.cursor..].chars().next().unwrap_or(' ');
+                if character.is_whitespace() {
+                    self.cursor = self.next_char_boundary(self.cursor);
+                } else {
+                    break;
+                }
+            }
+
+            while self.cursor < self.text.len() {
+                let character = self.text[self.cursor..].chars().next().unwrap_or(' ');
+                if character.is_alphanumeric() || character == '_' {
+                    self.cursor = self.next_char_boundary(self.cursor);
+                } else {
+                    break;
+                }
+            }
+        }
+
+        if shift {
+            self.set_selection(self.selection_anchor, self.cursor);
+        } else {
+            self.selection_anchor = self.cursor;
+            self.selection = None;
+        }
+    }
+
+    fn delete_word_backward(&mut self) {
+        if self.delete_selection() || self.cursor == 0 {
+            return;
+        }
+
+        let end = self.cursor;
+        self.move_word(-1, false);
+        let start = self.cursor;
+        if start < end {
+            let line = self.line_from_index(start);
+            self.text.replace_range(start..end, "");
+            self.cursor = start;
+            self.selection_anchor = start;
+            self.text_changed(line);
+        }
+    }
+
+    fn delete_word_forward(&mut self) {
+        if self.delete_selection() || self.cursor >= self.text.len() {
+            return;
+        }
+
+        let start = self.cursor;
+        let mut end = start;
+        while end < self.text.len() {
+            let character = self.text[end..].chars().next().unwrap_or(' ');
+            if character.is_whitespace() {
+                end = self.next_char_boundary(end);
+            } else {
+                break;
+            }
+        }
+        while end < self.text.len() {
+            let character = self.text[end..].chars().next().unwrap_or(' ');
+            if character.is_alphanumeric() || character == '_' {
+                end = self.next_char_boundary(end);
+            } else {
+                break;
+            }
+        }
+
+        if start < end {
+            let line = self.line_from_index(start);
+            self.text.replace_range(start..end, "");
+            self.text_changed(line);
         }
     }
 

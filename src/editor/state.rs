@@ -18,3 +18,11 @@ pub struct EditorStats {
     pub cursor_line: usize,
     pub cursor_column: usize,
 }
+
+#[derive(Clone)]
+pub(super) struct EditorSnapshot {
+    pub text: String,
+    pub cursor: usize,
+    pub selection: Option<std::ops::Range<usize>>,
+    pub selection_anchor: usize,
+}
