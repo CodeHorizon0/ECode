@@ -3,7 +3,14 @@
 Remember how code editors on older PCs used to launch in milliseconds? This project aims to get closer to that. For speed, it uses a native Egui interface and completely abandons web technologies.
 
 ## Current features
-The current working prototype supports a tab system, code highlighting, basic keybinds, and optimized rendering of large code.
+1.Code tabs system
+2.Sidebar workspace explorer
+3.Basic keybinds
+4.Optimized rendering and code highlighting in large code files
 
 ## Planned features
-Code refactoring, multithreaded file parser, ram optimization, windows context menu integration (Open as...).
+1.Code refactoring, 
+2.Multithreaded file parser, 
+3.Ram and speed startup optimization, 
+4.Windows context menu integration (Open as...)
+5.Settings menu
