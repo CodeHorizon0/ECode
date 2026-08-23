@@ -1,8 +1,8 @@
+// editor/input.rs
 use eframe::egui::{self, Key, Ui};
 
 use super::state::BRACKET_PAIRS;
 use super::CodeEditor;
-use crate::config::INDENT;
 
 impl CodeEditor {
     pub(super) fn handle_input(&mut self, ui: &mut Ui) {
@@ -236,7 +236,8 @@ impl CodeEditor {
 
     fn indent_selection(&mut self) {
         let Some(range) = self.selection.clone() else {
-            self.insert_text_raw(INDENT);
+            let indent = self.indent_unit.clone();
+            self.insert_text_raw(&indent);
             return;
         };
 
@@ -246,15 +247,15 @@ impl CodeEditor {
 
         for line in (start_line..=end_line).rev() {
             let position = self.line_start(line);
-            self.text.insert_str(position, INDENT);
-            inserted += INDENT.len();
+            self.text.insert_str(position, &self.indent_unit);
+            inserted += self.indent_unit.len();
 
             if position <= self.cursor {
-                self.cursor += INDENT.len();
+                self.cursor += self.indent_unit.len();
             }
 
             if position <= self.selection_anchor {
-                self.selection_anchor += INDENT.len();
+                self.selection_anchor += self.indent_unit.len();
             }
         }
 
@@ -278,8 +279,8 @@ impl CodeEditor {
         for line in (start_line..=end_line).rev() {
             let line_start = self.line_start(line);
             let line_end = self.line_end(line);
-            let remove = if self.text[line_start..line_end].starts_with(INDENT) {
-                INDENT.len()
+            let remove = if self.text[line_start..line_end].starts_with(&self.indent_unit) {
+                self.indent_unit.len()
             } else if self.text[line_start..line_end].starts_with('\t') {
                 1
             } else {
@@ -337,14 +338,14 @@ impl CodeEditor {
         let line_start = self.line_start(line);
         let offset = self.cursor.saturating_sub(line_start);
 
-        if offset >= INDENT.len()
-            && self.text[line_start..self.cursor].ends_with(INDENT)
+        if offset >= self.indent_unit.len()
+            && self.text[line_start..self.cursor].ends_with(&self.indent_unit)
         {
             self.text.replace_range(
-                self.cursor - INDENT.len()..self.cursor,
+                self.cursor - self.indent_unit.len()..self.cursor,
                 "",
             );
-            self.cursor -= INDENT.len();
+            self.cursor -= self.indent_unit.len();
             self.selection_anchor = self.cursor;
             self.text_changed(line);
         } else if offset > 0
@@ -475,16 +476,16 @@ impl CodeEditor {
         let next = self.current_char();
 
         if previous == Some('{') && next == Some('}') {
-            let insertion = format!("\n{}{}\n{}", indentation, INDENT, indentation);
+            let insertion = format!("\n{}{}\n{}", indentation, self.indent_unit, indentation);
             self.text.insert_str(self.cursor, &insertion);
-            self.cursor += indentation.len() + 1 + INDENT.len();
+            self.cursor += indentation.len() + 1 + self.indent_unit.len();
             self.selection_anchor = self.cursor;
             self.text_changed(line);
             return;
         }
 
         let insertion = if previous == Some('{') {
-            format!("\n{}{}", indentation, INDENT)
+            format!("\n{}{}", indentation, self.indent_unit)
         } else {
             format!("\n{}", indentation)
         };

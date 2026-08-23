@@ -1,3 +1,4 @@
+// app.rs
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
@@ -7,7 +8,8 @@ use syntect::highlighting::ThemeSet;
 use syntect::parsing::SyntaxSet;
 
 use crate::bindings::{default_bindings, Action, Binding};
-use crate::config::{BACKGROUND, LANGUAGES, TAB_ACTIVE, TAB_HOVER};
+use crate::config::{BACKGROUND, LANGUAGES};
+use crate::settings::{EditorSettings, EditorTheme};
 use crate::editor::CodeEditor;
 use crate::fs;
 use crate::workspace::{NodeKind, Workspace};
@@ -42,6 +44,8 @@ pub struct CodeApp {
     replace_query: String,
     go_to_line_open: bool,
     go_to_line_input: String,
+    settings_open: bool,
+    settings: EditorSettings,
 }
 
 impl CodeApp {
@@ -81,6 +85,8 @@ impl CodeApp {
             replace_query: String::new(),
             go_to_line_open: false,
             go_to_line_input: String::new(),
+            settings_open: false,
+            settings: EditorSettings::default(),
         }
     }
 
@@ -569,6 +575,12 @@ impl CodeApp {
 
                     ui.separator();
 
+                    if ui.button("Settings").clicked() {
+                        self.settings_open = true;
+                    }
+
+                    ui.separator();
+
                     let explorer_text = if self.explorer_visible {
                         "Hide Explorer"
                     } else {
@@ -604,7 +616,7 @@ impl CodeApp {
 
                                 let frame = egui::Frame::none()
                                     .fill(if selected {
-                                        TAB_ACTIVE
+                                        self.settings.tab_active
                                     } else {
                                         egui::Color32::TRANSPARENT
                                     })
@@ -628,7 +640,7 @@ impl CodeApp {
                                             ui.painter().rect_filled(
                                                 response.rect,
                                                 0.0,
-                                                TAB_HOVER,
+                                                self.settings.tab_hover,
                                             );
                                         }
 
@@ -1156,7 +1168,7 @@ impl CodeApp {
             .show(ctx, |ui| {
                 if let Some(editor) = self.editors.get_mut(self.current_tab) {
                     let editor_id = ui.id().with("code_editor");
-                    editor.ui(ui, editor_id, &self.syntax_set);
+                    editor.ui(ui, editor_id, &self.syntax_set, &self.theme_set, &self.settings);
                 }
             });
     }
@@ -1199,6 +1211,184 @@ impl CodeApp {
                 .show(ctx, |ui| {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 });
+        }
+    }
+
+    fn render_settings(&mut self, ctx: &Context) {
+        if !self.settings_open {
+            return;
+        }
+
+        let mut open = true;
+        let mut reset = false;
+        let settings = &mut self.settings;
+
+        egui::Window::new("Settings")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(460.0)
+            .show(ctx, |ui| {
+                ui.heading("Editor");
+                ui.add_space(6.0);
+
+                egui::Grid::new("settings_editor_grid")
+                    .num_columns(2)
+                    .spacing([16.0, 8.0])
+                    .show(ui, |ui| {
+                        ui.label("Font size");
+                        ui.add(
+                            egui::DragValue::new(&mut settings.font_size)
+                                .clamp_range(8.0..=32.0)
+                                .speed(0.25),
+                        );
+                        ui.end_row();
+
+                        ui.label("Tab size");
+                        ui.add(
+                            egui::DragValue::new(&mut settings.tab_size)
+                                .clamp_range(1..=16)
+                                .speed(1),
+                        );
+                        ui.end_row();
+
+                        ui.label("Line numbers");
+                        ui.checkbox(&mut settings.show_line_numbers, "Show");
+                        ui.end_row();
+
+                        ui.label("Current line");
+                        ui.checkbox(
+                            &mut settings.highlight_current_line,
+                            "Highlight",
+                        );
+                        ui.end_row();
+
+                        ui.label("Left text padding");
+                        ui.add(
+                            egui::DragValue::new(&mut settings.text_left_padding)
+                                .clamp_range(0.0..=32.0)
+                                .speed(0.5),
+                        );
+                        ui.end_row();
+
+                        ui.label("Top text padding");
+                        ui.add(
+                            egui::DragValue::new(&mut settings.text_top_padding)
+                                .clamp_range(0.0..=32.0)
+                                .speed(0.5),
+                        );
+                        ui.end_row();
+
+                        ui.label("Bottom text padding");
+                        ui.add(
+                            egui::DragValue::new(&mut settings.text_bottom_padding)
+                                .clamp_range(0.0..=64.0)
+                                .speed(0.5),
+                        );
+                        ui.end_row();
+
+                        ui.label("Gutter padding");
+                        ui.add(
+                            egui::DragValue::new(&mut settings.gutter_right_padding)
+                                .clamp_range(0.0..=24.0)
+                                .speed(0.5),
+                        );
+                        ui.end_row();
+                    });
+
+                ui.add_space(14.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                ui.heading("Appearance");
+                ui.add_space(6.0);
+
+                egui::ComboBox::from_id_source("settings_theme")
+                    .selected_text(settings.theme.name())
+                    .show_ui(ui, |ui| {
+                        for theme in EditorTheme::ALL {
+                            ui.selectable_value(
+                                &mut settings.theme,
+                                theme,
+                                theme.name(),
+                            );
+                        }
+                    });
+
+                ui.add_space(8.0);
+
+                egui::Grid::new("settings_colors_grid")
+                    .num_columns(2)
+                    .spacing([16.0, 8.0])
+                    .show(ui, |ui| {
+                        ui.label("Editor background");
+                        ui.color_edit_button_srgba(&mut settings.background);
+                        ui.end_row();
+
+                        ui.label("Gutter background");
+                        ui.color_edit_button_srgba(&mut settings.gutter_background);
+                        ui.end_row();
+
+                        ui.label("Current line");
+                        ui.color_edit_button_srgba(
+                            &mut settings.current_line_background,
+                        );
+                        ui.end_row();
+
+                        ui.label("Selection");
+                        ui.color_edit_button_srgba(
+                            &mut settings.selection_background,
+                        );
+                        ui.end_row();
+
+                        ui.label("Line numbers");
+                        ui.color_edit_button_srgba(&mut settings.line_number_color);
+                        ui.end_row();
+
+                        ui.label("Cursor");
+                        ui.color_edit_button_srgba(&mut settings.cursor_color);
+                        ui.end_row();
+
+                        ui.label("Separator");
+                        ui.color_edit_button_srgba(&mut settings.separator_color);
+                        ui.end_row();
+
+                        ui.label("Active tab");
+                        ui.color_edit_button_srgba(&mut settings.tab_active);
+                        ui.end_row();
+
+                        ui.label("Tab hover");
+                        ui.color_edit_button_srgba(&mut settings.tab_hover);
+                        ui.end_row();
+                    });
+
+                ui.add_space(14.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                ui.horizontal(|ui| {
+                    if ui.button("Reset to defaults").clicked() {
+                        reset = true;
+                    }
+
+                    ui.with_layout(
+                        egui::Layout::right_to_left(egui::Align::Center),
+                        |ui| {
+                            ui.label(RichText::new("Changes apply immediately").weak());
+                        },
+                    );
+                });
+            });
+
+        if reset {
+            self.settings.reset();
+            self.request_editor_focus();
+        }
+
+        self.settings_open = open;
+
+        if !self.settings_open {
+            self.request_editor_focus();
         }
     }
 
@@ -1289,6 +1479,7 @@ impl eframe::App for CodeApp {
         self.render_go_to_line(ctx);
         self.render_editor(ctx);
         self.render_status(ctx);
+        self.render_settings(ctx);
         self.render_close_confirmation(ctx);
         self.render_explorer_dialog(ctx);
     }

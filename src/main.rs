@@ -4,6 +4,7 @@ mod config;
 mod editor;
 mod fs;
 mod workspace;
+mod settings;
 
 use std::time::Instant;
 

@@ -31,6 +31,7 @@ pub struct CodeEditor {
     pub(super) focus_requested: bool,
     pub(super) undo_stack: Vec<EditorSnapshot>,
     pub(super) redo_stack: Vec<EditorSnapshot>,
+    pub(super) indent_unit: String,
 }
 
 impl CodeEditor {
@@ -77,6 +78,7 @@ impl CodeEditor {
             focus_requested: true,
             undo_stack: Vec::new(),
             redo_stack: Vec::new(),
+            indent_unit: "    ".to_string(),
         };
 
         editor.rebuild_line_index();
@@ -118,8 +120,11 @@ impl CodeEditor {
         ui: &mut Ui,
         id: Id,
         syntax_set: &SyntaxSet,
+        theme_set: &ThemeSet,
+        settings: &crate::settings::EditorSettings,
     ) -> Response {
-        render::render(self, ui, id, syntax_set)
+        self.highlighter.set_theme(settings.theme, theme_set);
+        render::render(self, ui, id, syntax_set, settings)
     }
 
     pub fn stats(&self) -> EditorStats {
@@ -153,6 +158,11 @@ impl CodeEditor {
 
     pub fn rename_path(&mut self, path: PathBuf) {
         self.path = Some(path);
+    }
+
+
+    pub fn set_indent_unit(&mut self, size: usize) {
+        self.indent_unit = " ".repeat(size.clamp(1, 16));
     }
 
     pub fn request_focus(&mut self) {
