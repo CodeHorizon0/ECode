@@ -1,9 +1,9 @@
+use std::sync::Arc;
+
 use eframe::egui::{text::LayoutJob, Color32, FontId};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::Theme;
-use vscode_theme_syntect::parse_vscode_theme;
-use crate::settings::EditorTheme;
-use syntect::parsing::{SyntaxReference, SyntaxSet};
+use syntect::parsing::SyntaxSet;
 
 #[derive(Clone, Copy)]
 struct StyleRange {
@@ -18,59 +18,22 @@ struct CachedLine {
 }
 
 pub struct Highlighter {
-    syntax: SyntaxReference,
-    theme: Theme,
+    theme: Arc<Theme>,
     lines: Vec<Option<CachedLine>>,
-    revisions: Vec<u64>,
-    revision: u64,
+    revisions: Vec<u32>,
+    revision: u32,
     language: String,
-    theme_kind: EditorTheme,
 }
 
 impl Highlighter {
-    pub fn new(
-        syntax_set: &SyntaxSet,
-        theme_set: &syntect::highlighting::ThemeSet,
-        language: &str,
-    ) -> Self {
-        let syntax = syntax_set
-            .find_syntax_by_name(language)
-            .unwrap_or_else(|| syntax_set.find_syntax_plain_text());
-        let theme = parse_vscode_theme(include_str!("../../assets/ecode-dark.json"))
-            .and_then(Theme::try_from)
-            .unwrap_or_else(|_| theme_set.themes["base16-ocean.dark"].clone());
-
+    pub fn new(theme: &Arc<Theme>, language: &str) -> Self {
         Self {
-            syntax: syntax.clone(),
-            theme,
+            theme: Arc::clone(theme),
             lines: Vec::new(),
             revisions: Vec::new(),
             revision: 0,
             language: language.to_string(),
-            theme_kind: EditorTheme::ECodeDark,
         }
-    }
-
-    pub fn set_theme(&mut self, theme: EditorTheme, theme_set: &syntect::highlighting::ThemeSet) {
-        if self.theme_kind == theme {
-            return;
-        }
-
-        self.theme = match theme {
-            EditorTheme::ECodeDark => parse_vscode_theme(include_str!("../../assets/ecode-dark.json"))
-                .and_then(Theme::try_from)
-                .unwrap_or_else(|_| theme_set.themes["base16-ocean.dark"].clone()),
-            EditorTheme::Base16OceanDark => theme_set.themes["base16-ocean.dark"].clone(),
-        };
-
-        self.theme_kind = theme;
-        self.revision = self.revision.wrapping_add(1);
-
-        for line in &mut self.lines {
-            *line = None;
-        }
-
-        self.revisions.fill(0);
     }
 
     pub fn language_name(&self) -> &str {
@@ -113,9 +76,10 @@ impl Highlighter {
             return;
         };
 
-        let syntax = self.syntax.clone();
-        let theme = self.theme.clone();
-        let mut highlighter = HighlightLines::new(&syntax, &theme);
+        let syntax = syntax_set
+            .find_syntax_by_name(&self.language)
+            .unwrap_or_else(|| syntax_set.find_syntax_plain_text());
+        let mut highlighter = HighlightLines::new(syntax, self.theme.as_ref());
         let mut line = 0usize;
 
         while line <= last_line {

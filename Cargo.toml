@@ -7,5 +7,12 @@ edition = "2021"
 eframe = "0.27"
 egui = "0.27"
 rfd = "0.14"
-syntect = "5.0"
+syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "regex-onig"] }
 vscode-theme-syntect = "0.1.1"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true

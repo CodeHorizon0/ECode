@@ -9,22 +9,22 @@ pub fn rebuild_line_index(editor: &mut CodeEditor) {
 
     for (index, byte) in editor.text.bytes().enumerate() {
         if byte == b'\n' {
-            editor.line_char_counts.push(
-                editor.text[line_start..index].chars().count(),
-            );
+            let count = editor.text[line_start..index].chars().count();
+            editor.line_char_counts.push(count as u32);
             editor.line_starts.push(index + 1);
             line_start = index + 1;
         }
     }
 
-    editor.line_char_counts.push(editor.text[line_start..].chars().count());
+    editor.line_char_counts
+        .push(editor.text[line_start..].chars().count() as u32);
     editor.max_line_chars = editor
         .line_char_counts
         .iter()
         .copied()
         .max()
         .unwrap_or(1)
-        .max(1);
+        .max(1) as usize;
     editor.char_count = editor.text.chars().count();
 }
 
@@ -94,8 +94,3 @@ pub fn char_to_byte(text: &str, column: usize) -> usize {
     text.len()
 }
 
-pub fn char_boundaries(text: &str) -> Vec<usize> {
-    text.char_indices()
-        .map(|(index, character)| index + character.len_utf8())
-        .collect()
-}

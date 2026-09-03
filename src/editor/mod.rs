@@ -4,11 +4,13 @@ mod input;
 mod render;
 mod state;
 
+use std::collections::VecDeque;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use eframe::egui::{Id, Response, Ui};
-use syntect::highlighting::ThemeSet;
+use syntect::highlighting::Theme;
 use syntect::parsing::SyntaxSet;
 
 use self::highlighting::Highlighter;
@@ -21,7 +23,7 @@ pub struct CodeEditor {
     pub(super) selection: Option<Range<usize>>,
     pub(super) selection_anchor: usize,
     pub(super) line_starts: Vec<usize>,
-    pub(super) line_char_counts: Vec<usize>,
+    pub(super) line_char_counts: Vec<u32>,
     pub(super) max_line_chars: usize,
     pub(super) char_count: usize,
     pub(super) highlighter: Highlighter,
@@ -29,30 +31,23 @@ pub struct CodeEditor {
     pub(super) untitled_name: String,
     pub(super) dirty: bool,
     pub(super) focus_requested: bool,
-    pub(super) undo_stack: Vec<EditorSnapshot>,
-    pub(super) redo_stack: Vec<EditorSnapshot>,
-    pub(super) indent_unit: String,
+    pub(super) undo_stack: VecDeque<EditorSnapshot>,
+    pub(super) redo_stack: VecDeque<EditorSnapshot>,
+    pub(super) undo_bytes: usize,
+    pub(super) redo_bytes: usize,
 }
 
 impl CodeEditor {
     pub fn new(
-        syntax_set: &SyntaxSet,
-        theme_set: &ThemeSet,
+        theme: &Arc<Theme>,
         language: &str,
         initial_text: &str,
     ) -> Self {
-        Self::new_with_name(
-            syntax_set,
-            theme_set,
-            language,
-            initial_text,
-            "Untitled".to_string(),
-        )
+        Self::new_with_name(theme, language, initial_text, "Untitled".to_string())
     }
 
     pub fn new_with_name(
-        syntax_set: &SyntaxSet,
-        theme_set: &ThemeSet,
+        theme: &Arc<Theme>,
         language: &str,
         initial_text: &str,
         untitled_name: String,
@@ -67,18 +62,15 @@ impl CodeEditor {
             line_char_counts: Vec::new(),
             max_line_chars: 1,
             char_count: 0,
-            highlighter: Highlighter::new(
-                syntax_set,
-                theme_set,
-                language,
-            ),
+            highlighter: Highlighter::new(theme, language),
             path: None,
             untitled_name,
             dirty: false,
             focus_requested: true,
-            undo_stack: Vec::new(),
-            redo_stack: Vec::new(),
-            indent_unit: "    ".to_string(),
+            undo_stack: VecDeque::new(),
+            redo_stack: VecDeque::new(),
+            undo_bytes: 0,
+            redo_bytes: 0,
         };
 
         editor.rebuild_line_index();
@@ -97,18 +89,12 @@ impl CodeEditor {
     }
 
     pub fn from_file(
-        syntax_set: &SyntaxSet,
-        theme_set: &ThemeSet,
+        theme: &Arc<Theme>,
         path: PathBuf,
         language: &str,
         text: String,
     ) -> Self {
-        let mut editor = Self::new(
-            syntax_set,
-            theme_set,
-            language,
-            &text,
-        );
+        let mut editor = Self::new(theme, language, &text);
         editor.path = Some(path);
         editor.dirty = false;
         editor.focus_requested = true;
@@ -120,11 +106,8 @@ impl CodeEditor {
         ui: &mut Ui,
         id: Id,
         syntax_set: &SyntaxSet,
-        theme_set: &ThemeSet,
-        settings: &crate::settings::EditorSettings,
     ) -> Response {
-        self.highlighter.set_theme(settings.theme, theme_set);
-        render::render(self, ui, id, syntax_set, settings)
+        render::render(self, ui, id, syntax_set)
     }
 
     pub fn stats(&self) -> EditorStats {
@@ -160,26 +143,16 @@ impl CodeEditor {
         self.path = Some(path);
     }
 
-
-    pub fn set_indent_unit(&mut self, size: usize) {
-        self.indent_unit = " ".repeat(size.clamp(1, 16));
-    }
-
     pub fn request_focus(&mut self) {
         self.focus_requested = true;
     }
 
     pub fn set_language(
         &mut self,
-        syntax_set: &SyntaxSet,
-        theme_set: &ThemeSet,
+        theme: &Arc<Theme>,
         language: &str,
     ) {
-        self.highlighter = Highlighter::new(
-            syntax_set,
-            theme_set,
-            language,
-        );
+        self.highlighter = Highlighter::new(theme, language);
         self.highlighter.sync_line_count(self.line_count());
     }
 
@@ -230,11 +203,23 @@ impl CodeEditor {
     }
 
     fn push_snapshot(&mut self) {
+        const MAX_UNDO_ENTRIES: usize = 200;
+        const MAX_HISTORY_BYTES: usize = 16 * 1024 * 1024;
+
         let snapshot = self.snapshot();
-        if self.undo_stack.last().map(|value| value.text.as_str()) != Some(snapshot.text.as_str()) {
-            self.undo_stack.push(snapshot);
-            if self.undo_stack.len() > 200 {
-                self.undo_stack.remove(0);
+        if self.undo_stack.back().map(|value| value.text.as_str()) == Some(snapshot.text.as_str()) {
+            return;
+        }
+
+        self.undo_bytes += snapshot.text.len();
+        self.undo_stack.push_back(snapshot);
+
+        while self.undo_stack.len() > MAX_UNDO_ENTRIES || self.undo_bytes > MAX_HISTORY_BYTES {
+            if self.undo_stack.len() <= 1 {
+                break;
+            }
+            if let Some(oldest) = self.undo_stack.pop_front() {
+                self.undo_bytes = self.undo_bytes.saturating_sub(oldest.text.len());
             }
         }
     }
@@ -244,20 +229,24 @@ impl CodeEditor {
             return;
         }
 
-        let current = self.undo_stack.pop().unwrap();
-        self.redo_stack.push(current);
+        let current = self.undo_stack.pop_back().unwrap();
+        self.undo_bytes = self.undo_bytes.saturating_sub(current.text.len());
+        self.redo_bytes += current.text.len();
+        self.redo_stack.push_back(current);
 
-        if let Some(snapshot) = self.undo_stack.last().cloned() {
+        if let Some(snapshot) = self.undo_stack.back().cloned() {
             self.restore_snapshot(snapshot);
         }
     }
 
     pub fn redo(&mut self) {
-        let Some(snapshot) = self.redo_stack.pop() else {
+        let Some(snapshot) = self.redo_stack.pop_back() else {
             return;
         };
 
-        self.undo_stack.push(snapshot.clone());
+        self.redo_bytes = self.redo_bytes.saturating_sub(snapshot.text.len());
+        self.undo_bytes += snapshot.text.len();
+        self.undo_stack.push_back(snapshot.clone());
         self.restore_snapshot(snapshot);
     }
 
@@ -370,6 +359,7 @@ impl CodeEditor {
             .invalidate_from(edit_line, self.line_count());
         self.dirty = true;
         self.redo_stack.clear();
+        self.redo_bytes = 0;
         self.push_snapshot();
     }
 

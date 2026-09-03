@@ -1,9 +1,13 @@
 use eframe::egui::{self, Color32, FontId, Id, Rect, Response, ScrollArea, Sense, Ui, Vec2};
 use syntect::parsing::SyntaxSet;
 
-use crate::settings::EditorSettings;
+use crate::config::{
+    BACKGROUND, CURSOR_COLOR, CURRENT_LINE_BACKGROUND, FONT_SIZE, GUTTER_BACKGROUND,
+    GUTTER_RIGHT_PADDING, LINE_NUMBER_COLOR, SELECTION_BACKGROUND, SEPARATOR_COLOR,
+    TEXT_BOTTOM_PADDING, TEXT_LEFT_PADDING, TEXT_TOP_PADDING,
+};
 
-use super::geometry::{char_boundaries, char_to_byte};
+use super::geometry::char_to_byte;
 use super::CodeEditor;
 
 pub fn render(
@@ -11,7 +15,6 @@ pub fn render(
     ui: &mut Ui,
     id: Id,
     syntax_set: &SyntaxSet,
-    settings: &EditorSettings,
 ) -> Response {
     if editor.focus_requested {
         ui.memory_mut(|memory| {
@@ -20,17 +23,14 @@ pub fn render(
         editor.focus_requested = false;
     }
 
-    editor.set_indent_unit(settings.tab_size);
-
-    let font_id = FontId::monospace(settings.font_size);
+    let font_id = FontId::monospace(FONT_SIZE);
     let row_height = ui.fonts(|fonts| fonts.row_height(&font_id));
     let digit_width = ui.fonts(|fonts| fonts.glyph_width(&font_id, '0'));
-    let gutter_width = gutter_width(editor, ui, &font_id, settings);
-    let text_x = gutter_width + settings.text_left_padding;
+    let gutter_width = gutter_width(editor, ui, &font_id);
+    let text_x = gutter_width + TEXT_LEFT_PADDING;
     let total_lines = editor.line_count();
-    let total_height = (total_lines as f32 + 1.0) * row_height
-        + settings.text_top_padding
-        + settings.text_bottom_padding;
+    let total_height =
+        total_lines as f32 * row_height + TEXT_TOP_PADDING + TEXT_BOTTOM_PADDING;
     let content_width = ui.available_width().max(
         text_x + editor.max_line_chars as f32 * digit_width + 32.0,
     );
@@ -46,10 +46,10 @@ pub fn render(
 
             ui.allocate_rect(content_rect, Sense::hover());
 
-            let visible_start = ((viewport.min.y - settings.text_top_padding) / row_height)
+            let visible_start = ((viewport.min.y - TEXT_TOP_PADDING) / row_height)
                 .floor()
                 .max(0.0) as usize;
-            let visible_end = ((viewport.max.y - settings.text_top_padding) / row_height)
+            let visible_end = ((viewport.max.y - TEXT_TOP_PADDING) / row_height)
                 .ceil()
                 .max(0.0) as usize;
 
@@ -103,7 +103,6 @@ pub fn render(
                         gutter_width,
                         row_height,
                         &font_id,
-                        settings,
                     );
                     editor.cursor = cursor;
                     editor.select_word_at(cursor);
@@ -119,7 +118,6 @@ pub fn render(
                         gutter_width,
                         row_height,
                         &font_id,
-                        settings,
                     );
                     editor.cursor = cursor;
                     editor.select_line_at(cursor);
@@ -135,7 +133,6 @@ pub fn render(
                         gutter_width,
                         row_height,
                         &font_id,
-                        settings,
                     );
                     editor.cursor = cursor;
                     if !modifiers.shift {
@@ -154,7 +151,6 @@ pub fn render(
                         gutter_width,
                         row_height,
                         &font_id,
-                        settings,
                     );
                     editor.cursor = cursor;
 
@@ -177,7 +173,6 @@ pub fn render(
                         gutter_width,
                         row_height,
                         &font_id,
-                        settings,
                     );
                     editor.cursor = cursor;
                     editor.set_selection(editor.selection_anchor, cursor);
@@ -189,7 +184,7 @@ pub fn render(
             }
 
             let painter = ui.painter();
-            painter.rect_filled(content_rect, 0.0, settings.background);
+            painter.rect_filled(content_rect, 0.0, BACKGROUND);
 
             let gutter_rect = Rect::from_min_max(
                 content_rect.min,
@@ -198,21 +193,17 @@ pub fn render(
                     content_rect.max.y,
                 ),
             );
-            painter.rect_filled(gutter_rect, 0.0, settings.gutter_background);
+            painter.rect_filled(gutter_rect, 0.0, GUTTER_BACKGROUND);
 
-            if settings.highlight_current_line {
-                paint_current_line(
-                    editor,
-                    painter,
-                    content_rect,
-                    gutter_width,
-                    row_height,
-                    visible_start,
-                    visible_end,
-                    settings,
-                );
-            }
-
+            paint_current_line(
+                editor,
+                painter,
+                content_rect,
+                gutter_width,
+                row_height,
+                visible_start,
+                visible_end,
+            );
             paint_selection(
                 editor,
                 painter,
@@ -222,9 +213,7 @@ pub fn render(
                 &font_id,
                 visible_start,
                 visible_end,
-                settings,
             );
-
             paint_code(
                 editor,
                 painter,
@@ -234,21 +223,16 @@ pub fn render(
                 &font_id,
                 visible_start,
                 visible_end,
-                settings,
             );
-
-            if settings.show_line_numbers {
-                paint_line_numbers(
-                    painter,
-                    content_rect,
-                    gutter_width,
-                    row_height,
-                    visible_start,
-                    visible_end,
-                    &font_id,
-                    settings,
-                );
-            }
+            paint_line_numbers(
+                painter,
+                content_rect,
+                gutter_width,
+                row_height,
+                visible_start,
+                visible_end,
+                &font_id,
+            );
 
             if response.has_focus() && editor.selection.is_none() {
                 paint_cursor(
@@ -258,7 +242,6 @@ pub fn render(
                     text_x,
                     row_height,
                     &font_id,
-                    settings,
                 );
             }
 
@@ -267,29 +250,15 @@ pub fn render(
         .inner
 }
 
-fn gutter_width(
-    editor: &CodeEditor,
-    ui: &Ui,
-    font_id: &FontId,
-    settings: &EditorSettings,
-) -> f32 {
-    if !settings.show_line_numbers {
-        return 0.0;
-    }
-
+fn gutter_width(editor: &CodeEditor, ui: &Ui, font_id: &FontId) -> f32 {
     let number = editor.line_count().to_string();
     let width = ui.fonts(|fonts| {
         fonts
-            .layout_no_wrap(
-                number,
-                font_id.clone(),
-                settings.line_number_color,
-            )
+            .layout_no_wrap(number, font_id.clone(), LINE_NUMBER_COLOR)
             .size()
             .x
     });
-
-    width + settings.gutter_right_padding
+    width + GUTTER_RIGHT_PADDING
 }
 
 fn paint_code(
@@ -301,14 +270,13 @@ fn paint_code(
     font_id: &FontId,
     first_line: usize,
     last_line: usize,
-    settings: &EditorSettings,
 ) {
     for line in first_line..=last_line {
         let job = editor
             .highlighter
             .line_job(&editor.text, line, &editor.line_starts, font_id);
         let galley = painter.layout_job(job);
-        let y = rect.min.y + settings.text_top_padding + line as f32 * row_height;
+        let y = rect.min.y + TEXT_TOP_PADDING + line as f32 * row_height;
 
         painter.galley(
             egui::pos2(rect.min.x + text_x, y),
@@ -326,14 +294,13 @@ fn paint_current_line(
     row_height: f32,
     first_line: usize,
     last_line: usize,
-    settings: &EditorSettings,
 ) {
     let line = editor.cursor_line();
     if line < first_line || line > last_line {
         return;
     }
 
-    let y = rect.min.y + settings.text_top_padding + line as f32 * row_height;
+    let y = rect.min.y + TEXT_TOP_PADDING + line as f32 * row_height;
 
     painter.rect_filled(
         Rect::from_min_size(
@@ -341,7 +308,7 @@ fn paint_current_line(
             egui::vec2(rect.width(), row_height),
         ),
         0.0,
-        settings.current_line_background,
+        CURRENT_LINE_BACKGROUND,
     );
 
     let separator_x = rect.min.x + gutter_width;
@@ -350,7 +317,7 @@ fn paint_current_line(
             egui::pos2(separator_x, y),
             egui::pos2(separator_x, y + row_height),
         ],
-        egui::Stroke::new(1.0_f32, settings.separator_color),
+        egui::Stroke::new(1.0_f32, SEPARATOR_COLOR),
     );
 }
 
@@ -362,18 +329,17 @@ fn paint_line_numbers(
     first_line: usize,
     last_line: usize,
     font_id: &FontId,
-    settings: &EditorSettings,
 ) {
     for line in first_line..=last_line {
         let number = (line + 1).to_string();
         let galley = painter.layout_no_wrap(
             number,
             font_id.clone(),
-            settings.line_number_color,
+            LINE_NUMBER_COLOR,
         );
-        let y = rect.min.y + settings.text_top_padding + line as f32 * row_height;
-        let x = rect.min.x + gutter_width - settings.gutter_right_padding - galley.size().x;
-        painter.galley(egui::pos2(x, y), galley, settings.line_number_color);
+        let y = rect.min.y + TEXT_TOP_PADDING + line as f32 * row_height;
+        let x = rect.min.x + gutter_width - GUTTER_RIGHT_PADDING - galley.size().x;
+        painter.galley(egui::pos2(x, y), galley, LINE_NUMBER_COLOR);
     }
 }
 
@@ -386,7 +352,6 @@ fn paint_selection(
     font_id: &FontId,
     first_line: usize,
     last_line: usize,
-    settings: &EditorSettings,
 ) {
     let Some(selection) = editor.selection.as_ref() else {
         return;
@@ -450,8 +415,8 @@ fn paint_selection(
                 .x;
         }
 
-        let x = rect.min.x + gutter_width + settings.text_left_padding + start_width;
-        let y = rect.min.y + settings.text_top_padding + line as f32 * row_height;
+        let x = rect.min.x + gutter_width + TEXT_LEFT_PADDING + start_width;
+        let y = rect.min.y + TEXT_TOP_PADDING + line as f32 * row_height;
 
         painter.rect_filled(
             Rect::from_min_size(
@@ -459,7 +424,7 @@ fn paint_selection(
                 egui::vec2(width, row_height),
             ),
             0.0,
-            settings.selection_background,
+            SELECTION_BACKGROUND,
         );
     }
 }
@@ -471,7 +436,6 @@ fn paint_cursor(
     text_x: f32,
     row_height: f32,
     font_id: &FontId,
-    settings: &EditorSettings,
 ) {
     let line = editor.cursor_line();
     let line_start = editor.line_start(line);
@@ -487,7 +451,7 @@ fn paint_cursor(
         .x;
 
     let x = rect.min.x + text_x + width;
-    let y = rect.min.y + settings.text_top_padding + line as f32 * row_height;
+    let y = rect.min.y + TEXT_TOP_PADDING + line as f32 * row_height;
 
     painter.rect_filled(
         Rect::from_min_size(
@@ -495,7 +459,7 @@ fn paint_cursor(
             egui::vec2(1.5, row_height),
         ),
         0.0,
-        settings.cursor_color,
+        CURSOR_COLOR,
     );
 }
 
@@ -507,14 +471,11 @@ fn position_to_cursor(
     gutter_width: f32,
     row_height: f32,
     font_id: &FontId,
-    settings: &EditorSettings,
 ) -> usize {
-    let text_x = rect.min.x + gutter_width + settings.text_left_padding;
-    let text_y = rect.min.y + settings.text_top_padding;
+    let text_x = rect.min.x + gutter_width + TEXT_LEFT_PADDING;
+    let text_y = rect.min.y + TEXT_TOP_PADDING;
 
-    let line = ((position.y - text_y) / row_height)
-        .floor()
-        .max(0.0) as usize;
+    let line = ((position.y - text_y) / row_height).floor().max(0.0) as usize;
     let line = line.min(editor.line_count().saturating_sub(1));
     let line_start = editor.line_start(line);
     let line_end = editor.line_end(line);
@@ -529,14 +490,21 @@ fn position_to_cursor(
         return line_start;
     }
 
-    let mut previous_width = 0.0_f32;
-    let mut column = 0usize;
+    let char_count = editor.line_char_counts[line] as usize;
+    if char_count == 0 {
+        return line_start;
+    }
 
-    for byte_end in char_boundaries(line_text) {
+    let mut low = 0usize;
+    let mut high = char_count;
+
+    while low < high {
+        let mid = low + (high - low) / 2;
+        let byte_end = char_to_byte(line_text, mid);
         let width = ui.fonts(|fonts| {
             fonts
                 .layout_no_wrap(
-                    line_text[..byte_end].to_string(),
+                    line_text[..byte_end].to_owned(),
                     font_id.clone(),
                     Color32::WHITE,
                 )
@@ -544,13 +512,42 @@ fn position_to_cursor(
                 .x
         });
 
-        let midpoint = (previous_width + width) * 0.5_f32;
-        if target_x < midpoint {
-            break;
+        if width < target_x {
+            low = mid + 1;
+        } else {
+            high = mid;
         }
+    }
 
-        previous_width = width;
-        column += 1;
+    let mut column = low;
+    if low > 0 && low < char_count {
+        let left_byte = char_to_byte(line_text, low - 1);
+        let right_byte = char_to_byte(line_text, low);
+
+        let left_width = ui.fonts(|fonts| {
+            fonts
+                .layout_no_wrap(
+                    line_text[..left_byte].to_owned(),
+                    font_id.clone(),
+                    Color32::WHITE,
+                )
+                .size()
+                .x
+        });
+        let right_width = ui.fonts(|fonts| {
+            fonts
+                .layout_no_wrap(
+                    line_text[..right_byte].to_owned(),
+                    font_id.clone(),
+                    Color32::WHITE,
+                )
+                .size()
+                .x
+        });
+
+        if target_x - left_width < right_width - target_x {
+            column = low - 1;
+        }
     }
 
     editor.byte_index_from_column(line_start, line_end, column)

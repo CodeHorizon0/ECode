@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use rfd::FileDialog;
 
-use crate::config::language_for_path;
+use crate::config::language_for_extension;
 
 #[derive(Debug)]
 pub struct LoadedFile {
@@ -26,7 +26,12 @@ pub fn open_file_dialog() -> io::Result<Option<LoadedFile>> {
 
 pub fn load_file(path: &Path) -> io::Result<LoadedFile> {
     let text = fs::read_to_string(path)?;
-    let language = language_for_path(path).to_string();
+    let language = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(language_for_extension)
+        .unwrap_or("Plain Text")
+        .to_string();
 
     Ok(LoadedFile {
         path: path.to_path_buf(),
