@@ -14,3 +14,4 @@ Remember how code editors on older PCs used to launch in milliseconds? This proj
 2. Multithreaded file parser,
 3. ~~Ram and speed startup optimization~~
 4. Windows context menu integration (Open as...)
+5. Cli startup mode as ecode 
