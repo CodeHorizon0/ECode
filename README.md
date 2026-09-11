@@ -10,7 +10,7 @@ Remember how code editors on older PCs used to launch in milliseconds? This proj
 5. Optimized rendering and code highlighting in large code files
 
 ## Planned features
-1. Code refactoring, 
-2. Multithreaded file parser, 
-3. Ram and speed startup optimization, 
+1. Code refactoring
+2. Multithreaded file parser,
+3. ~~Ram and speed startup optimization~~
 4. Windows context menu integration (Open as...)
