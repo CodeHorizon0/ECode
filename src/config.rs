@@ -1,11 +1,10 @@
-use egui::Color32;
+use eframe::egui::Color32;
 
 pub const FONT_SIZE: f32 = 14.0;
 pub const TEXT_LEFT_PADDING: f32 = 7.0;
 pub const TEXT_TOP_PADDING: f32 = 4.0;
 pub const TEXT_BOTTOM_PADDING: f32 = 12.0;
 pub const GUTTER_RIGHT_PADDING: f32 = 7.0;
-pub const INDENT: &str = "    ";
 
 pub const BACKGROUND: Color32 = Color32::from_rgb(15, 17, 23);
 pub const GUTTER_BACKGROUND: Color32 = Color32::from_rgb(13, 15, 20);

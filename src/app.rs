@@ -10,7 +10,9 @@ use vscode_theme_syntect::parse_vscode_theme;
 
 use crate::bindings::{default_bindings, Action, Binding};
 use crate::config::{BACKGROUND, LANGUAGES, TAB_ACTIVE, TAB_HOVER};
+use crate::settings::{EditorSettings, EditorTheme};
 use crate::editor::CodeEditor;
+use crate::terminal::TerminalManager;
 use crate::fs;
 use crate::workspace::{NodeKind, Workspace};
 
@@ -44,6 +46,9 @@ pub struct CodeApp {
     replace_query: String,
     go_to_line_open: bool,
     go_to_line_input: String,
+    terminals: TerminalManager,
+    settings: EditorSettings,
+    settings_open: bool,
 }
 
 impl CodeApp {
@@ -87,6 +92,9 @@ impl CodeApp {
             replace_query: String::new(),
             go_to_line_open: false,
             go_to_line_input: String::new(),
+            terminals: TerminalManager::default(),
+            settings: EditorSettings::default(),
+            settings_open: false,
         }
     }
 
@@ -355,6 +363,10 @@ impl CodeApp {
     }
 
     fn handle_global_shortcuts(&mut self, ctx: &Context) {
+        if self.terminals.is_focused(ctx) {
+            return;
+        }
+
         let mut actions = Vec::new();
 
         for binding in &self.bindings {
@@ -521,10 +533,37 @@ impl CodeApp {
         }
     }
 
-    fn render_menu(&mut self, ctx: &Context) {
-        egui::TopBottomPanel::top("menu")
-            .exact_height(38.0)
-            .show(ctx, |ui| {
+    fn apply_editor_theme(&mut self) {
+        let theme = match self.settings.theme {
+            EditorTheme::ECodeDark => self.ecode_theme(),
+            EditorTheme::Base16OceanDark => self.base16_theme(),
+        };
+        self.theme = theme;
+        for editor in &mut self.editors {
+            editor.set_theme(&self.theme);
+        }
+    }
+
+    fn ecode_theme(&self) -> Arc<Theme> {
+        let vscode_theme = parse_vscode_theme(include_str!("../assets/ecode-dark.json"))
+            .expect("failed to parse ECode theme");
+        Arc::new(Theme::try_from(vscode_theme).expect("failed to convert ECode theme"))
+    }
+
+    fn base16_theme(&self) -> Arc<Theme> {
+        let themes = syntect::highlighting::ThemeSet::load_defaults();
+        themes
+            .themes
+            .get("base16-ocean.dark")
+            .cloned()
+            .map(Arc::new)
+            .unwrap_or_else(|| self.ecode_theme())
+    }
+
+    fn render_menu(&mut self, ui: &mut egui::Ui, ctx: &Context) {
+        egui::Panel::top("menu")
+            .exact_size(38.0)
+            .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
 
@@ -536,6 +575,9 @@ impl CodeApp {
                     }
                     if ui.button("Open Folder").clicked() {
                         self.open_project();
+                    }
+                    if ui.button("Settings").clicked() {
+                        self.settings_open = true;
                     }
                     if ui.button("Save").clicked() {
                         self.save_current();
@@ -550,7 +592,7 @@ impl CodeApp {
                     ui.separator();
                     ui.label("New file:");
 
-                    egui::ComboBox::from_id_source("lang_combo")
+                    egui::ComboBox::from_id_salt("lang_combo")
                         .width(115.0)
                         .selected_text(&self.new_tab_language)
                         .show_ui(ui, |ui| {
@@ -565,6 +607,18 @@ impl CodeApp {
 
                     ui.separator();
 
+                    if ui.button(if self.terminals.is_visible() { "Hide Terminal" } else { "Show Terminal" }).clicked() {
+                        self.terminals.toggle();
+                        if self.terminals.is_visible() {
+                            let cwd = self.terminal_cwd();
+                            if let Err(error) = self.terminals.ensure_terminal(&cwd, ctx) {
+                                self.set_error(error);
+                            }
+                        } else {
+                            self.request_editor_focus();
+                        }
+                    }
+
                     let explorer_text = if self.explorer_visible {
                         "Hide Explorer"
                     } else {
@@ -575,19 +629,47 @@ impl CodeApp {
                         self.explorer_visible = !self.explorer_visible;
                         self.request_editor_focus();
                     }
+
+                    egui::ComboBox::from_id_salt("editor_theme")
+                        .selected_text(self.settings.theme.name())
+                        .show_ui(ui, |ui| {
+                            for theme in EditorTheme::ALL {
+                                if ui.selectable_label(self.settings.theme == theme, theme.name()).clicked() {
+                                    self.settings.theme = theme;
+                                    self.apply_editor_theme();
+                                    ui.close();
+                                }
+                            }
+                        });
+
+                    egui::ComboBox::from_id_salt("tab_size")
+                        .selected_text(format!("Tab: {}", self.settings.tab_size))
+                        .show_ui(ui, |ui| {
+                            for size in [2usize, 4, 8] {
+                                if ui.selectable_label(self.settings.tab_size == size, size.to_string()).clicked() {
+                                    self.settings.tab_size = size;
+                                    ui.close();
+                                }
+                            }
+                        });
+
+                    if ui.button("Reset settings").clicked() {
+                        self.settings.reset();
+                        self.apply_editor_theme();
+                    }
                 });
             });
     }
 
-    fn render_tabs(&mut self, ctx: &Context) {
+    fn render_tabs(&mut self, ui: &mut egui::Ui) {
         let mut selected_tab = None;
         let mut close_tab = None;
 
-        egui::TopBottomPanel::top("tabs")
-            .exact_height(34.0)
-            .show(ctx, |ui| {
+        egui::Panel::top("tabs")
+            .exact_size(34.0)
+            .show(ui, |ui| {
                 egui::ScrollArea::horizontal()
-                    .id_source("tab_scroll")
+                    .id_salt("tab_scroll")
                     .auto_shrink([false, true])
                     .show(ui, |ui| {
                         ui.horizontal(|ui| {
@@ -598,13 +680,13 @@ impl CodeApp {
                                 let name = self.editors[index].file_name();
                                 let dirty = self.editors[index].is_dirty();
 
-                                let frame = egui::Frame::none()
+                                let frame = egui::Frame::NONE
                                     .fill(if selected {
                                         TAB_ACTIVE
                                     } else {
                                         egui::Color32::TRANSPARENT
                                     })
-                                    .inner_margin(egui::Margin::symmetric(8.0, 0.0));
+                                    .inner_margin(egui::Margin::symmetric(8, 0));
 
                                 frame.show(ui, |ui| {
                                     ui.set_height(32.0);
@@ -617,7 +699,7 @@ impl CodeApp {
                                         };
 
                                         let response = ui.add(
-                                            egui::SelectableLabel::new(selected, label),
+                                            egui::Button::selectable(selected, label),
                                         );
 
                                         if response.hovered() && !selected {
@@ -654,7 +736,7 @@ impl CodeApp {
         }
     }
 
-    fn render_explorer(&mut self, ctx: &Context) {
+    fn render_explorer(&mut self, ui: &mut egui::Ui) {
         if !self.explorer_visible {
             return;
         }
@@ -663,12 +745,12 @@ impl CodeApp {
         let mut toggle_dir = None;
         let mut select_path = None;
 
-        egui::SidePanel::left("explorer")
+        egui::Panel::left("explorer")
             .resizable(true)
-            .default_width(250.0)
-            .min_width(170.0)
-            .max_width(420.0)
-            .show(ctx, |ui| {
+            .default_size(250.0)
+            .min_size(170.0)
+            .max_size(420.0)
+            .show(ui, |ui| {
                 ui.add_space(8.0);
 
                 ui.horizontal(|ui| {
@@ -733,12 +815,12 @@ impl CodeApp {
                     ui.separator();
 
                     egui::ScrollArea::vertical()
-                        .id_source("explorer_tree")
+                        .id_salt("explorer_tree")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             let explorer_font = egui::FontId::proportional(13.0);
                             let explorer_row_height = ui
-                                .fonts(|fonts| fonts.row_height(&explorer_font))
+                                .fonts_mut(|fonts| fonts.row_height(&explorer_font))
                                 .max(20.0);
 
                             for node in self.workspace.visible_nodes() {
@@ -776,14 +858,17 @@ impl CodeApp {
                                     NodeKind::File => "•",
                                 };
 
-                                ui.allocate_ui_at_rect(row_rect, |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.add_space(8.0 + node.depth as f32 * 14.0);
-                                        ui.label(RichText::new(icon).monospace());
-                                        ui.add_space(4.0);
-                                        ui.label(RichText::new(node.name.clone()).size(13.0));
-                                    });
-                                });
+                                ui.scope_builder(
+                                    egui::UiBuilder::new().max_rect(row_rect),
+                                    |ui| {
+                                        ui.horizontal(|ui| {
+                                            ui.add_space(8.0 + node.depth as f32 * 14.0);
+                                            ui.label(RichText::new(icon).monospace());
+                                            ui.add_space(4.0);
+                                            ui.label(RichText::new(node.name.clone()).size(13.0));
+                                        });
+                                    },
+                                );
 
                                 if response.clicked() {
                                     select_path = Some(node.path.clone());
@@ -1067,14 +1152,14 @@ impl CodeApp {
         }
     }
 
-    fn render_search_bar(&mut self, ctx: &Context) {
+    fn render_search_bar(&mut self, ui: &mut egui::Ui) {
         if !self.find_open {
             return;
         }
 
-        egui::TopBottomPanel::top("search_bar")
-            .exact_height(if self.replace_open { 68.0 } else { 36.0 })
-            .show(ctx, |ui| {
+        egui::Panel::top("search_bar")
+            .exact_size(if self.replace_open { 68.0 } else { 36.0 })
+            .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Find");
                     let response = ui.text_edit_singleline(&mut self.search_query);
@@ -1115,12 +1200,12 @@ impl CodeApp {
         self.request_editor_focus();
     }
 
-    fn render_go_to_line(&mut self, ctx: &Context) {
+    fn render_go_to_line(&mut self, ui: &mut egui::Ui) {
         if !self.go_to_line_open { return; }
 
-        egui::TopBottomPanel::top("goto_line")
-            .exact_height(36.0)
-            .show(ctx, |ui| {
+        egui::Panel::top("goto_line")
+            .exact_size(36.0)
+            .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label("Go to line");
                     let response = ui.text_edit_singleline(&mut self.go_to_line_input);
@@ -1142,25 +1227,103 @@ impl CodeApp {
         self.request_editor_focus();
     }
 
-    fn render_editor(&mut self, ctx: &Context) {
+    fn render_settings(&mut self, ctx: &Context) {
+        if !self.settings_open {
+            return;
+        }
+
+        let mut open = self.settings_open;
+        egui::Window::new("Settings")
+            .open(&mut open)
+            .resizable(false)
+            .collapsible(false)
+            .show(ctx, |ui| {
+                ui.heading("Editor");
+                ui.separator();
+
+                ui.horizontal(|ui| {
+                    ui.label("Theme");
+                    egui::ComboBox::from_id_salt("settings_theme")
+                        .selected_text(self.settings.theme.name())
+                        .show_ui(ui, |ui| {
+                            for theme in EditorTheme::ALL {
+                                if ui
+                                    .selectable_label(self.settings.theme == theme, theme.name())
+                                    .clicked()
+                                {
+                                    self.settings.theme = theme;
+                                    self.apply_editor_theme();
+                                    ui.close();
+                                }
+                            }
+                        });
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Font size");
+                    ui.add(egui::DragValue::new(&mut self.settings.font_size).range(8.0..=32.0));
+                });
+
+                ui.horizontal(|ui| {
+                    ui.label("Tab size");
+                    ui.add(egui::DragValue::new(&mut self.settings.tab_size).range(1..=8));
+                });
+
+                ui.checkbox(&mut self.settings.show_line_numbers, "Show line numbers");
+                ui.checkbox(
+                    &mut self.settings.highlight_current_line,
+                    "Highlight current line",
+                );
+
+                ui.separator();
+                if ui.button("Reset settings").clicked() {
+                    self.settings.reset();
+                    self.apply_editor_theme();
+                }
+            });
+
+        self.settings_open = open;
+    }
+
+    fn terminal_cwd(&self) -> PathBuf {
+        self.workspace
+            .root()
+            .map(Path::to_path_buf)
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    fn render_terminal(&mut self, ui: &mut egui::Ui, ctx: &Context) {
+        if !self.terminals.is_visible() {
+            return;
+        }
+
+        let cwd = self.terminal_cwd();
+        if let Some(error) = self.terminals.ui(ui, ctx, &cwd) {
+            self.set_error(error);
+        }
+    }
+
+    fn render_editor(&mut self, ui: &mut egui::Ui) {
         egui::CentralPanel::default()
             .frame(
-                egui::Frame::none()
+                egui::Frame::NONE
                     .fill(BACKGROUND)
-                    .inner_margin(0.0),
+                    .inner_margin(egui::Margin::ZERO),
             )
-            .show(ctx, |ui| {
+            .show(ui, |ui| {
                 if let Some(editor) = self.editors.get_mut(self.current_tab) {
                     let editor_id = ui.id().with("code_editor");
-                    editor.ui(ui, editor_id, &self.syntax_set);
+                    editor.set_tab_size(self.settings.tab_size);
+                    editor.ui(ui, editor_id, &self.syntax_set, &self.settings);
                 }
             });
     }
 
-    fn render_status(&self, ctx: &Context) {
-        egui::TopBottomPanel::bottom("status")
-            .exact_height(26.0)
-            .show(ctx, |ui| {
+    fn render_status(&self, ui: &mut egui::Ui) {
+        egui::Panel::bottom("status")
+            .exact_size(26.0)
+            .show(ui, |ui| {
                 ui.horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 12.0;
 
@@ -1190,9 +1353,9 @@ impl CodeApp {
             });
 
         if let Some(error) = &self.last_error {
-            egui::TopBottomPanel::bottom("error_status")
-                .exact_height(22.0)
-                .show(ctx, |ui| {
+            egui::Panel::bottom("error_status")
+                .exact_size(22.0)
+                .show(ui, |ui| {
                     ui.colored_label(egui::Color32::LIGHT_RED, error);
                 });
         }
@@ -1268,7 +1431,9 @@ impl CodeApp {
 }
 
 impl eframe::App for CodeApp {
-    fn update(&mut self, ctx: &Context, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let ctx = ui.ctx().clone();
+
         if !self.startup_logged {
             println!(
                 "[startup] GUI ready in {:.2} ms",
@@ -1277,16 +1442,18 @@ impl eframe::App for CodeApp {
             self.startup_logged = true;
         }
 
-        self.handle_global_shortcuts(ctx);
-        self.render_menu(ctx);
-        self.render_tabs(ctx);
-        self.render_explorer(ctx);
-        self.render_search_bar(ctx);
-        self.render_go_to_line(ctx);
-        self.render_editor(ctx);
-        self.render_status(ctx);
-        self.render_close_confirmation(ctx);
-        self.render_explorer_dialog(ctx);
+        self.handle_global_shortcuts(&ctx);
+        self.render_menu(ui, &ctx);
+        self.render_tabs(ui);
+        self.render_explorer(ui);
+        self.render_search_bar(ui);
+        self.render_go_to_line(ui);
+        self.render_terminal(ui, &ctx);
+        self.render_status(ui);
+        self.render_editor(ui);
+        self.render_settings(&ctx);
+        self.render_close_confirmation(&ctx);
+        self.render_explorer_dialog(&ctx);
     }
 }
 

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use eframe::egui::{text::LayoutJob, Color32, FontId};
+use eframe::egui::{self, text::LayoutJob, Color32, FontId};
 use syntect::easy::HighlightLines;
 use syntect::highlighting::Theme;
 use syntect::parsing::SyntaxSet;
@@ -38,6 +38,13 @@ impl Highlighter {
 
     pub fn language_name(&self) -> &str {
         &self.language
+    }
+
+    pub fn set_theme(&mut self, theme: &Arc<Theme>) {
+        self.theme = Arc::clone(theme);
+        self.revision = self.revision.wrapping_add(1);
+        self.lines.iter_mut().for_each(|line| *line = None);
+        self.revisions.fill(0);
     }
 
     pub fn sync_line_count(&mut self, count: usize) {

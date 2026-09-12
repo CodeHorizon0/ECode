@@ -31,10 +31,11 @@ pub struct CodeEditor {
     pub(super) untitled_name: String,
     pub(super) dirty: bool,
     pub(super) focus_requested: bool,
-    pub(super) undo_stack: VecDeque<EditorSnapshot>,
-    pub(super) redo_stack: VecDeque<EditorSnapshot>,
+    undo_stack: VecDeque<EditorSnapshot>,
+    redo_stack: VecDeque<EditorSnapshot>,
     pub(super) undo_bytes: usize,
     pub(super) redo_bytes: usize,
+    pub(super) tab_size: usize,
 }
 
 impl CodeEditor {
@@ -71,6 +72,7 @@ impl CodeEditor {
             redo_stack: VecDeque::new(),
             undo_bytes: 0,
             redo_bytes: 0,
+            tab_size: 4,
         };
 
         editor.rebuild_line_index();
@@ -106,8 +108,13 @@ impl CodeEditor {
         ui: &mut Ui,
         id: Id,
         syntax_set: &SyntaxSet,
+        settings: &crate::settings::EditorSettings,
     ) -> Response {
-        render::render(self, ui, id, syntax_set)
+        render::render(self, ui, id, syntax_set, settings)
+    }
+
+    pub(super) fn set_tab_size(&mut self, tab_size: usize) {
+        self.tab_size = tab_size.clamp(1, 16);
     }
 
     pub fn stats(&self) -> EditorStats {
@@ -147,6 +154,10 @@ impl CodeEditor {
         self.focus_requested = true;
     }
 
+    pub(super) fn indent_unit(&self) -> String {
+        " ".repeat(self.tab_size)
+    }
+
     pub fn set_language(
         &mut self,
         theme: &Arc<Theme>,
@@ -154,6 +165,10 @@ impl CodeEditor {
     ) {
         self.highlighter = Highlighter::new(theme, language);
         self.highlighter.sync_line_count(self.line_count());
+    }
+
+    pub(super) fn set_theme(&mut self, theme: &Arc<Theme>) {
+        self.highlighter.set_theme(theme);
     }
 
     pub fn is_dirty(&self) -> bool {

@@ -3,6 +3,8 @@ mod bindings;
 mod config;
 mod editor;
 mod fs;
+mod settings;
+mod terminal;
 mod workspace;
 
 use std::time::Instant;
@@ -23,8 +25,6 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "ECode",
         options,
-        Box::new(move |cc| {
-            Box::new(CodeApp::new(cc, startup_time))
-        }),
+        Box::new(move |cc| Ok(Box::new(CodeApp::new(cc, startup_time)))),
     )
 }

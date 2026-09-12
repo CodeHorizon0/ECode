@@ -1,14 +1,16 @@
 [package]
-name = "code_editor"
+name = "ECode"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-eframe = "0.27"
-egui = "0.27"
-rfd = "0.14"
-syntect = { version = "5.3", default-features = false, features = ["default-syntaxes", "regex-onig"] }
+eframe = "0.36.2"
+egui = "0.36.2"
+rfd = "0.17.2"
+syntect = { version = "5.3.0", default-features = false, features = ["default-syntaxes", "default-themes", "regex-onig"] }
 vscode-theme-syntect = "0.1.1"
+portable-pty = "0.9.0"
+vt100 = "0.16.2"
 
 [profile.release]
 opt-level = 3
